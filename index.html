@@ -1035,8 +1035,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     ext: true,
     key_ops: ["verify"],
     kty: "EC",
-    x: "jQoVEAJdRY4CWWBvn8uJk9PXhNaZfukXLPPrH6LtKq4",
-    y: "ZwMBRzPCaXLW6HX1ksT5FYi6x9NVAIc-ElS5fm2W8A4",
+    x: "izIiBmJ2u8xVrUEYd4x_ad7wydwiThDaOu3Pg0bcP5E",
+    y: "_6fElYPY6bFCkxXqciTfiBhno1lHjLtOoHQuGkrYbqU",
   };
 
   let cachedPublicKey = null;
@@ -1093,6 +1093,18 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     }
   }
 
+  /**
+   * የመልሶ ማግኛ ቶክን (Restore Token)፦ ገንቢው በግል ቁልፉ "SBM-RESTORE:" + <የሱቅ ስም> ላይ የፈረመው ፊርማ።
+   * ያለ ግል ቁልፍ ሊሰላ ወይም ሊገመት አይችልም — የህዝብ ቁልፍ ማረጋገጥ ብቻ ይችላል።
+   */
+  async function verifyRestoreToken(shopName, token) {
+    try {
+      const msg = new TextEncoder().encode("SBM-RESTORE:" + String(shopName || "").trim().toLowerCase());
+      const sig = b64ToBuf(String(token || "").replace(/\s+/g, ""));
+      return await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, await getPublicKey(), sig, msg);
+    } catch (e) { return false; }
+  }
+
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function lsRemove(k) { try { localStorage.removeItem(k); } catch (e) {} }
@@ -1137,6 +1149,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     getActivationRecord,
     deactivate,
     verifyLicenseKey,
+    verifyRestoreToken,
   };
 })(window);
 
@@ -1606,15 +1619,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   // ---------- linking a device to the store's cloud data ----------
 
-  /**
-   * የመልሶ ማግኛ ኮድ = SHA-256("SBM-RESTORE:" + <የሱቅ ስም በትንንሽ ፊደል>) የመጀመሪያዎቹ 8 hex ትልቅ ፊደል።
-   * (keygen.html ከሚያሰላው ጋር ተመሳሳይ ነው።)
-   */
-  async function computeRestoreCode(shopName) {
-    const hashHex = await SBM.auth.sha256Hex("SBM-RESTORE:" + shopName);
-    return hashHex.slice(0, 8).toUpperCase();
-  }
-
   function toast(m) { if (SBM.utils && SBM.utils.showToast) SBM.utils.showToast(m); }
 
   async function askRestoreCode(localEmpty) {
@@ -1624,8 +1628,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     if (!wants) return false;
     const code = prompt("🔑 የመልሶ ማግኛ ኮድ (Restore Code) ያስገቡ፡\n(ከሻጭዎ ያግኙት)");
     if (!code) return false;
-    const expected = await computeRestoreCode(getShopName());
-    if (String(code).trim().toUpperCase() !== expected) { toast("ኮዱ ትክክል አይደለም። ❌"); return false; }
+    if (!(await SBM.activation.verifyRestoreToken(getShopName(), code))) { toast("ኮዱ ትክክል አይደለም። ❌"); return false; }
     return true;
   }
 
@@ -1752,6 +1755,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   /** በእጅ "ከደመና መልስ" (Backup ገጽ) — የአሁኑን ዳታ በደመናው ይተካል (ኮድ ያስፈልጋል)። */
   async function manualRestore() {
+    if (!SBM.utils.requireAdmin()) return;
     try {
       if (!started) await start();
       if (!started) { toast("ደመናው አልተገኘም። ኢንተርኔት እና ፍቃድ ያረጋግጡ።"); return; }
@@ -1761,7 +1765,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       if (live.length === 0) { toast("በደመና ላይ ምንም የተቀመጠ ዳታ አልተገኘም።"); return; }
       const code = prompt("🔑 የመልሶ ማግኛ ኮድ (Restore Code) ያስገቡ፡\n(ከሻጭዎ ያግኙት)");
       if (!code) return;
-      if (String(code).trim().toUpperCase() !== (await computeRestoreCode(getShopName()))) { toast("ኮዱ ትክክል አይደለም። ❌"); return; }
+      if (!(await SBM.activation.verifyRestoreToken(getShopName(), code))) { toast("ኮዱ ትክክል አይደለም። ❌"); return; }
       if (!confirm("ማስጠንቀቂያ፡ የአሁኑ ዳታ በደመና ላይ ባለው ይተካል። ይቀጥሉ?")) return;
 
       const DB = SBM.DB;
@@ -1818,7 +1822,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   global.SBM.sync = {
     init, start, syncNow, onReset, status,
     pushToCloud: schedulePush, pushNow: syncNow,
-    manualRestore, offerRestoreIfEmpty, computeRestoreCode,
+    manualRestore, offerRestoreIfEmpty,
     _sdk: sdkApi,
   };
 })(window);
@@ -3489,6 +3493,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   async function exportData() {
+    if (!SBM.utils.requireAdmin()) return;
     const snapshot = SBM.database.exportSnapshot();
     // Attach a checksum so a corrupted/tampered file can be detected on import.
     const checksum = await SBM.auth.sha256Hex(JSON.stringify(snapshot));
@@ -3504,6 +3509,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function importData() {
+    if (!SBM.utils.requireAdmin()) return;
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json,application/json";
@@ -3537,6 +3543,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function resetAllData() {
+    if (!SBM.utils.requireAdmin()) return;
     if (confirm("እርግጠኛ ነዎት ሁንም የሽያጭ፣ የወጪ እና የዱቤ መዝገብ ማጽዳት ይፈልጋሉ?")) {
       SBM.database.resetTransactionalData();
       showToast("ሁሉም ዳታ ጸድቷል!");
@@ -3595,6 +3602,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function toggleVat() {
+    if (!SBM.utils.requireAdmin()) return;
     DB.vatEnabled = document.getElementById("cfgVatEnabled").checked;
     SBM.database.save("vatEnabled");
     if (SBM.app && SBM.app.renderDashboardMenu) SBM.app.renderDashboardMenu();
@@ -3602,6 +3610,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function saveCompanyName() {
+    if (!SBM.utils.requireAdmin()) return;
     const c = (document.getElementById("cfgComp").value || "").trim();
     if (!c) return alert("እባክዎን ትክክለኛ የድርጅት ስም ያስገቡ!");
     DB.companyName = c;
@@ -3611,6 +3620,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   async function changePin() {
+    if (!SBM.utils.requireAdmin()) return;
     const oldPin = (document.getElementById("cfgOldPin").value || "").trim();
     const newPin = (document.getElementById("cfgNewPin").value || "").trim();
     if (!oldPin || !newPin) return alert("እባክዎን ሁለቱንም ፒኖች ያስገቡ!");
