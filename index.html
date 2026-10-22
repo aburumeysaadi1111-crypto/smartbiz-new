@@ -201,9 +201,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       creditHistory: {},
       expenses: [],
       vatInputs: {},
+      stockCounts: [], // የስቶክ ቆጠራ መዝገብ: { id, date, by, adjusted, lines:[{name,unit,system,counted,diff,value}] }
+      alerts: [], // ለአድሚን ማሳወቂያዎች: { id, date, type, by, text, amount, read }
+      returns: [], // የተመላሽ እቃ መዝገብ (ኦዲት): { id, date, saleId, customer, items, amount, by, full }
       debtPayments: [], // የዱቤ ክፍያ መሰብሰቢያ መዝገብ: { id, date, customer, amount, method: "cash"|"bank", ref }
       monthlyReports: {}, // የተዘጉ ወራት ማጠቃለያ (ቁልፍ "ዓ.ም-ወር")፦ የሽያጭ ታሪክ ቢጸዳም እዚህ ይቆያል
-      returns: [], // ተመላሽ ዕቃና የሽያጭ ስረዛ መዝገብ (returns.js): { id, saleId, type: "return"|"void", date, lines, total, refundCash, refundBank, creditReduced, ... }
     };
   }
 
@@ -262,8 +264,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       expenses: DB.expenses,
       vatInputs: DB.vatInputs,
       debtPayments: DB.debtPayments,
-      monthlyReports: DB.monthlyReports,
       returns: DB.returns,
+      alerts: DB.alerts,
+      stockCounts: DB.stockCounts,
+      monthlyReports: DB.monthlyReports,
       exportedAt: new Date().toISOString(),
       schemaVersion: 2,
     };
@@ -272,7 +276,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   /** Restores business data fields from a parsed backup object. Never touches security data. */
   function importSnapshot(data) {
     if (!data || typeof data !== "object") throw new Error("Invalid backup payload");
-    const fields = ["stock", "sales", "credits", "creditHistory", "expenses", "companyName", "vatInputs", "vatEnabled", "debtPayments", "monthlyReports", "returns"];
+    const fields = ["stock", "sales", "credits", "creditHistory", "expenses", "companyName", "vatInputs", "vatEnabled", "debtPayments", "monthlyReports", "returns", "alerts", "stockCounts"];
     fields.forEach((f) => {
       if (data[f] !== undefined) DB[f] = data[f];
     });
@@ -285,8 +289,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     DB.credits = [];
     DB.creditHistory = {};
     DB.debtPayments = [];
-    DB.returns = [];
-    ["sales", "expenses", "credits", "creditHistory", "debtPayments", "returns"].forEach(save);
+    ["sales", "expenses", "credits", "creditHistory", "debtPayments"].forEach(save);
     // ሌሎች ስልኮች የድሮውን ታሪክ መልሰው እንዳያመጡ ለደመናው "reset" መኖሩን ያሳውቃል
     if (global.SBM && global.SBM.sync && global.SBM.sync.onReset) global.SBM.sync.onReset();
   }
@@ -396,8 +399,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     { title: "መሸጫ (POS)", icon: "🛒", page: "pos", vatOnly: false },
     { title: "የዕለት ሪፖርት", icon: "📅", page: "dailyReport", adminOnly: true },
     { title: "የወር ሪፖርት", icon: "📆", page: "monthlyReport", adminOnly: true },
-    { title: "የሽያጭ ታሪክ", icon: "📜", page: "salesHistory", adminOnly: true },
-    { title: "ተመላሽ / ስረዛ", icon: "↩️", page: "returns" },
+    { title: "የሽያጭ ታሪክ", icon: "📜", page: "salesHistory" },
+    { title: "የተመላሽ መዝገብ", icon: "↩️", page: "returnsLog", adminOnly: true },
+    { title: "ማሳወቂያ", icon: "🔔", page: "alerts", adminOnly: true },
+    { title: "የስቶክ ቆጠራ", icon: "🧮", page: "stockCount", adminOnly: true },
     { title: "የብድር መዝገብ", icon: "💳", page: "credit" },
     { title: "ወጪዎች", icon: "💸", page: "expenses" },
     { title: "የቫት ሪፖርት", icon: "📑", page: "vatReport", vatOnly: true, adminOnly: true },
@@ -423,7 +428,18 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const s = SBM.auth && SBM.auth.getSession ? SBM.auth.getSession() : null;
     if (!s) return;
     p.innerText = "👤 " + s.name + " (" + (s.role === "admin" ? "አድሚን" : "ሰራተኛ") + ") — " +
-      (s.role === "admin" ? "ሁሉንም ገጽ ማየት ይችላሉ።" : "መሸጥ፣ ተመላሽ ማድረግ፣ ዱቤ መሰብሰብ እና ስቶክ ማየት ይችላሉ።");
+      (s.role === "admin" ? "ሁሉንም ገጽ ማየት ይችላሉ።" : "መሸጥ፣ የተመለሰ እቃ መመዝገብ፣ ዱቤ መሰብሰብ እና ስቶክ ማየት ይችላሉ።");
+  }
+
+  function unreadAlertCount() { return ((SBM.DB && SBM.DB.alerts) || []).filter((a) => a && !a.read).length; }
+
+  /** ሰራተኛ ጥርጣሬ ያለው ድርጊት ሲፈጽም ለአድሚን ማሳወቂያ ይመዘግባል (ከደመና ጋር ወደ አድሚን ስልክ ይደርሳል)። */
+  function addAlert(type, text, amount) {
+    const s = SBM.auth && SBM.auth.getSession ? SBM.auth.getSession() : null;
+    if (!s || s.role === "admin") return; // አድሚን ራሱ ለራሱ አያሳውቅም
+    if (!Array.isArray(SBM.DB.alerts)) SBM.DB.alerts = [];
+    SBM.DB.alerts.push({ id: Date.now(), date: getEthDateStr(), type, by: s.name, text, amount: Number(amount) || 0, read: false });
+    SBM.database.save("alerts");
   }
 
   function renderDashboardMenu() {
@@ -436,7 +452,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       .filter((i) => !i.vatOnly || vatOn)
       .filter((i) => !i.adminOnly || admin)
       .map((i) => {
-        const title = i.page === "pos" ? (vatOn ? "መሸጫ (POS + VAT)" : "መሸጫ (POS)") : i.title;
+        let title = i.page === "pos" ? (vatOn ? "መሸጫ (POS + VAT)" : "መሸጫ (POS)") : i.title;
+        if (i.page === "alerts") { const n = unreadAlertCount(); if (n > 0) title += " (" + n + " አዲስ)"; }
         return `<button type="button" class="menu-card" onclick="SBM.app.openPage('${escapeHTML(i.page)}')"><div class="card-icon">${i.icon}</div><div class="card-title">${escapeHTML(title)}</div></button>`;
       }).join("");
   }
@@ -454,7 +471,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       case "stock": title.innerText = "📦 የዕቃዎች መዝገብ (Stock)"; body.innerHTML = SBM.stock.renderUI(); break;
       case "pos": SBM.sales.resetSession(); title.innerText = SBM.DB.vatEnabled ? "🛒 መሸጫ ከ15% ቫት ጋር (POS)" : "🛒 መሸጫ (POS)"; body.innerHTML = SBM.sales.renderUI(); SBM.sales.onItemChange(); break;
       case "salesHistory": title.innerText = "📜 የሽያጭ ሰነድ እና ታሪክ"; body.innerHTML = SBM.report.renderSalesHistoryUI(); break;
-      case "returns": title.innerText = "↩️ ተመላሽ ዕቃና ሽያጭ መሰረዝ"; body.innerHTML = SBM.returns.renderUI(); break;
+      case "stockCount": title.innerText = "🧮 የስቶክ ቆጠራ ማነጻጸሪያ"; body.innerHTML = SBM.stock.renderCountUI(); break;
+      case "alerts": title.innerText = "🔔 ማሳወቂያዎች"; body.innerHTML = SBM.report.renderAlertsUI(); break;
+      case "returnsLog": title.innerText = "↩️ የተመላሽ እቃዎች መዝገብ (ኦዲት)"; body.innerHTML = SBM.report.renderReturnsLogUI(); break;
       case "dailyReport": title.innerText = "📅 የዕለት ሽያጭ ሪፖርት"; body.innerHTML = SBM.report.renderDailyReportUI(); break;
       case "monthlyReport": SBM.report.closeFinishedMonths(); title.innerText = "📆 ወርሃዊ ሪፖርት"; body.innerHTML = SBM.report.renderMonthlyReportUI(); SBM.report.updateMonthlyReport(); break;
       case "credit": title.innerText = "💳 የብድር መዝገብ እና የሂሳብ ታሪክ"; body.innerHTML = SBM.credit.renderUI(); break;
@@ -566,6 +585,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       renderDashboardMenu();
       p.value = "";
       showToast("እንኳን ደህና መጡ " + result.name + "!");
+      if (SBM.auth.isAdmin() && unreadAlertCount() > 0) {
+        setTimeout(() => showToast("🔔 " + unreadAlertCount() + " አዲስ ማሳወቂያ አለ — «ማሳወቂያ» ይመልከቱ"), 3300);
+      }
       // አድሚን ሲገባ፦ የተጠናቀቁ ወራት በራሳቸው ይዘጋሉ (ይቀመጣሉ)፣ የወሩ መጨረሻ ቀን ከሆነም ማሳሰቢያ ይታያል።
       if (SBM.auth.isAdmin() && SBM.report && SBM.report.closeFinishedMonths) {
         const closed = SBM.report.closeFinishedMonths();
@@ -688,7 +710,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   global.SBM.app = {
     openPage, closeModal, toggleTheme, printModalContent, shareCurrentPage,
-    handleLogin, handleLogout, forgotPIN, tryActivate, renderDashboardMenu,
+    handleLogin, handleLogout, forgotPIN, tryActivate, renderDashboardMenu, addAlert,
   };
   window.print = printModalContent;
 })(window);
@@ -1119,7 +1141,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 })(window);
 
 // ==== sync.js ====
-
 /**
  * sync.js — Firebase (Firestore) ደመና ማመሳሰያ (ባካፕ + ከርቀት መከታተል)
  * ---------------------------------------------------------------------------
@@ -1363,7 +1384,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     (DB.sales || []).forEach((r) => { if (r && r.id != null) put("sale", r.id, r); });
     (DB.expenses || []).forEach((r) => { if (r && r.id != null) put("expense", r.id, r); });
     (DB.debtPayments || []).forEach((r) => { if (r && r.id != null) put("debtpay", r.id, r); });
-    (DB.returns || []).forEach((r) => { if (r && r.id != null) put("return", r.id, r); });
+    (DB.returns || []).forEach((r) => { if (r && r.id != null) put("ret", r.id, r); });
+    (DB.alerts || []).forEach((r) => { if (r && r.id != null) put("alert", r.id, r); });
+    (DB.stockCounts || []).forEach((r) => { if (r && r.id != null) put("scount", r.id, r); });
     (DB.stock || []).forEach((r) => { if (r && r.id != null) put("stock", r.id, r); });
     (DB.credits || []).forEach((r) => { if (r && r.customer) put("credit", String(r.customer).toLowerCase(), r); });
     Object.keys(DB.creditHistory || {}).forEach((n) => put("chist", n, DB.creditHistory[n]));
@@ -1373,7 +1396,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     return out;
   }
 
-  const APPEND_ONLY = { sale: "sales", expense: "expenses", debtpay: "debtPayments", return: "returns" };
+  const APPEND_ONLY = { sale: "sales", expense: "expenses", debtpay: "debtPayments" };
 
   function isLocalDataEmpty() {
     const DB = SBM.DB;
@@ -1396,8 +1419,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       changed.add(key);
     };
     switch (t) {
-      case "sale": case "expense": case "debtpay": case "return": arrOp(APPEND_ONLY[t]); break;
+      case "sale": case "expense": case "debtpay": arrOp(APPEND_ONLY[t]); break;
       case "stock": arrOp("stock"); break;
+      case "ret": arrOp("returns"); break;
+      case "alert": arrOp("alerts"); break;
+      case "scount": arrOp("stockCounts"); break;
       case "credit": {
         if (!Array.isArray(DB.credits)) DB.credits = [];
         const i = DB.credits.findIndex((x) => x && String(x.customer || "").toLowerCase() === k);
@@ -1436,7 +1462,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   function persistChanged(changed) {
     if (changed.size === 0) return;
     const DB = SBM.DB;
-    ["sales", "expenses", "debtPayments", "returns"].forEach((k) => {
+    ["sales", "expenses", "debtPayments"].forEach((k) => {
       if (changed.has(k) && Array.isArray(DB[k])) DB[k].sort((a, b) => Number(a.id) - Number(b.id));
     });
     applying = true;
@@ -1453,7 +1479,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   function applyRemoteReset(resetAt) {
     const DB = SBM.DB;
     const changed = new Set();
-    ["sales", "expenses", "debtPayments", "returns"].forEach((k) => {
+    ["sales", "expenses", "debtPayments"].forEach((k) => {
       if (Array.isArray(DB[k])) { DB[k] = DB[k].filter((x) => Number(x.id) > resetAt); changed.add(k); }
     });
     DB.credits = []; DB.creditHistory = {};
@@ -1740,9 +1766,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
       const DB = SBM.DB;
       const changed = new Set();
-      DB.sales = []; DB.expenses = []; DB.debtPayments = []; DB.returns = []; DB.stock = [];
+      DB.sales = []; DB.expenses = []; DB.debtPayments = []; DB.stock = [];
       DB.credits = []; DB.creditHistory = {}; DB.vatInputs = {}; DB.monthlyReports = {};
-      ["sales", "expenses", "debtPayments", "returns", "stock", "credits", "creditHistory", "vatInputs", "monthlyReports"].forEach((k) => changed.add(k));
+      ["sales", "expenses", "debtPayments", "stock", "credits", "creditHistory", "vatInputs", "monthlyReports"].forEach((k) => changed.add(k));
       state.meta = {};
       let maxS = 0;
       const mref = await timed(metaRef().get());
@@ -2035,7 +2061,81 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   global.SBM = global.SBM || {};
-  global.SBM.stock = { renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
+  function lastBuy(item) {
+    return (item.batches && item.batches.length) ? Number(item.batches[item.batches.length - 1].buyPrice || 0) : Number(item.buyPrice || 0);
+  }
+
+  /** በመደርደሪያ ላይ የተቆጠረውን ብዛት ከሲስተሙ ጋር ለማነጻጸር (አድሚን ብቻ)። ባዶ የተተወ እቃ አይቆጠርም። */
+  function renderCountUI() {
+    if (!SBM.utils.requireAdmin()) return "";
+    const list = DB.stock || [];
+    const rows = list.length === 0
+      ? '<tr><td colspan="3" style="text-align:center;">ምንም ዕቃ አልተመዘገበም</td></tr>'
+      : list.map((i) => `<tr><td><b>${escapeHTML(i.name)}</b></td><td>${i.qty} ${escapeHTML(i.unit || "ፍሬ")}</td>
+          <td><input type="number" step="0.01" id="sc_${i.id}" placeholder="ብዛት" style="width:90px;"></td></tr>`).join("");
+    const past = (DB.stockCounts || []).slice(-5).reverse().map((c) => {
+      const short = c.lines.filter((l) => l.diff < 0).reduce((a, l) => a + Math.abs(l.value), 0);
+      return `<tr><td><small>${escapeHTML(c.date)}</small><br><small>👤 ${escapeHTML(c.by || "")}</small></td><td>${c.lines.length} እቃ</td><td style="color:${short > 0 ? "#dc3545" : "green"};">${short > 0 ? "ጉድለት " + short.toFixed(2) + " ETB" : "ልዩነት የለም"}</td></tr>`;
+    }).join("");
+    return `<p style="font-size:12px;color:var(--secondary);margin-bottom:8px;">መደርደሪያ ላይ የቆጠሩትን ብዛት በትንሹ አሃድ (ኪሎ/ፍሬ) ያስገቡ። ያልቆጠሩትን ባዶ ይተዉ።</p>
+      <div style="max-height:300px;overflow-y:auto;"><table><thead><tr><th>ዕቃ</th><th>በሲስተም</th><th>የተቆጠረ</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <label style="display:flex;gap:8px;align-items:center;margin:10px 0;font-size:13px;"><input type="checkbox" id="scAdjust"> ስቶኩን ወደ ተቆጠረው ብዛት አስተካክል</label>
+      <button class="btn-primary" style="padding:10px;font-weight:bold;" onclick="SBM.stock.submitCount()">🧮 አነጻጽር እና መዝግብ</button>
+      ${past ? `<h4 style="margin-top:15px;">የቅርብ ቆጠራዎች</h4><table><tbody>${past}</tbody></table>` : ""}`;
+  }
+
+  function applyCountToItem(item, counted) {
+    const diff = counted - item.qty;
+    if (diff < 0) {
+      let need = -diff;
+      for (const b of (item.batches || [])) { if (need <= 0) break; const t = Math.min(need, b.qty); b.qty -= t; need -= t; }
+      item.batches = (item.batches || []).filter((b) => b.qty > 0);
+    } else if (diff > 0) {
+      if (!item.batches) item.batches = [];
+      item.batches.push({ qty: diff, buyPrice: lastBuy(item) });
+    }
+    item.qty = counted;
+  }
+
+  function submitCount() {
+    if (!SBM.utils.requireAdmin()) return;
+    const adjust = !!(document.getElementById("scAdjust") || {}).checked;
+    const lines = [];
+    (DB.stock || []).forEach((i) => {
+      const el = document.getElementById("sc_" + i.id);
+      if (!el || el.value === "") return;
+      const counted = parseFloat(el.value);
+      if (isNaN(counted) || counted < 0) return;
+      const diff = Math.round((counted - i.qty) * 100) / 100;
+      lines.push({ id: i.id, name: i.name, unit: i.unit || "ፍሬ", system: i.qty, counted, diff, value: Math.round(diff * lastBuy(i) * 100) / 100 });
+    });
+    if (lines.length === 0) return alert("ቢያንስ አንድ እቃ ቆጥረው ብዛቱን ያስገቡ!");
+    if (adjust && !confirm("ስቶኩ ወደ ተቆጠረው ብዛት ይስተካከላል። ይቀጥሉ?")) return;
+    if (adjust) {
+      lines.forEach((l) => { const it = DB.stock.find((x) => x.id === l.id); if (it) applyCountToItem(it, l.counted); });
+      SBM.database.save("stock");
+    }
+    if (!Array.isArray(DB.stockCounts)) DB.stockCounts = [];
+    DB.stockCounts.push({ id: Date.now(), date: SBM.utils.getEthDateStr(), by: SBM.auth.currentName(), adjusted: adjust,
+      lines: lines.map((l) => ({ name: l.name, unit: l.unit, system: l.system, counted: l.counted, diff: l.diff, value: l.value })) });
+    SBM.database.save("stockCounts");
+
+    const short = lines.filter((l) => l.diff < 0).reduce((a, l) => a + Math.abs(l.value), 0);
+    const over = lines.filter((l) => l.diff > 0).reduce((a, l) => a + l.value, 0);
+    const rows = lines.map((l) => `<tr><td><b>${escapeHTML(l.name)}</b></td><td>${l.system}</td><td>${l.counted}</td>
+      <td style="font-weight:bold;color:${l.diff < 0 ? "#dc3545" : l.diff > 0 ? "#28a745" : "inherit"};">${l.diff > 0 ? "+" : ""}${l.diff} ${escapeHTML(l.unit)}</td></tr>`).join("");
+    document.getElementById("modalTitle").innerText = "🧮 የቆጠራ ውጤት";
+    document.getElementById("modalBody").innerHTML = `
+      <div class="summary-box"><p>📉 ጉድለት (በመግዣ ዋጋ): <b style="color:#dc3545;">${short.toFixed(2)} ETB</b></p>
+      <p>📈 ትርፍ ብዛት: <b style="color:#28a745;">${over.toFixed(2)} ETB</b></p>
+      <p style="font-size:12px;">${adjust ? "✅ ስቶኩ ተስተካክሏል።" : "ስቶኩ አልተስተካከለም (ማነጻጸሪያ ብቻ)።"}</p></div>
+      <div style="max-height:300px;overflow-y:auto;"><table><thead><tr><th>ዕቃ</th><th>በሲስተም</th><th>የተቆጠረ</th><th>ልዩነት</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div style="display:flex;gap:10px;margin-top:12px;">
+        <button class="btn-secondary" style="flex:1;" onclick="SBM.app.openPage('stockCount')">⬅ ተመለስ</button>
+        <button class="btn-primary" style="flex:1;" onclick="SBM.app.printModalContent()">🖨️ አትም</button></div>`;
+  }
+
+  global.SBM.stock = { renderCountUI, submitCount, renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
 })(window);
 
 // ==== sales.js ====
@@ -2061,6 +2161,20 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   let posCart = [];
   let posSessionBatches = {};
+
+  const BANKS = ["ንግድ ባንክ (CBE)", "ዘምዘም ባንክ", "አቢሲንያ ባንክ", "ዳሽን ባንክ", "አዋሽ ባንክ", "ኦሮሚያ ባንክ", "ወጋገን ባንክ", "ንብ ባንክ", "ቡና ባንክ", "ኅብረት ባንክ", "ቴሌብር", "CBE Birr", "ሌላ"];
+  function bankSelectHTML(selId, otherId) {
+    return `<select id="${selId}" onchange="document.getElementById('${otherId}').classList.toggle('hidden', this.value !== 'ሌላ')">
+      <option value="">— ባንክ ይምረጡ —</option>${BANKS.map((b) => `<option value="${escapeHTML(b)}">${escapeHTML(b)}</option>`).join("")}</select>
+      <input type="text" id="${otherId}" class="hidden" style="margin-top:6px;" placeholder="የባንኩን ስም ይጻፉ">`;
+  }
+  /** የተመረጠውን ባንክ ስም ይመልሳል ("ሌላ" ከሆነ የተጻፈውን)። ካልተመረጠ "" */
+  function readBank(selId, otherId) {
+    const sel = document.getElementById(selId);
+    if (!sel || !sel.value) return "";
+    if (sel.value === "ሌላ") { const o = document.getElementById(otherId); return o ? o.value.trim() : ""; }
+    return sel.value;
+  }
 
   function resetSession() {
     posCart = [];
@@ -2125,7 +2239,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <div id="posMixRemainder" style="font-size:13px;font-weight:bold;margin-bottom:10px;">💳 ቀሪ በዱቤ: 0.00 ETB</div>
       </div>
       <div id="posBankGroup" class="hidden">
-        <div class="form-group"><label>🏦 የባንክ ማስተላለፊያ ማጣቀሻ ቁጥር / ባንክ (አማራጭ)</label><input type="text" id="posBankRef" placeholder="ምሳሌ፡ ንግድ ባንክ FT2610..."></div>
+        <div class="form-group"><label>🏦 ደንበኛው የላከበት ባንክ (ግዴታ — ለኦዲት)</label>${bankSelectHTML("posBankName", "posBankOther")}</div>
+        <div class="form-group"><label>የማስተላለፊያ ማጣቀሻ ቁጥር (አማራጭ)</label><input type="text" id="posBankRef" placeholder="ምሳሌ፡ FT2610..."></div>
       </div>
       <div id="posCreditGroup" class="hidden">
         <div class="form-group"><label>የደንበኛው ስም (ለዱቤ ግዴታ ነው)</label><input type="text" id="posCustomerName" placeholder="የደንበኛ ስም ያስገቡ"></div>
@@ -2230,6 +2345,14 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         need -= take;
       }
     }
+    if (profit < -0.005) {
+      const ok = confirm("⚠️ ማስጠንቀቂያ፦ ይህ የመሸጫ ዋጋ ከመግዣ ዋጋ በታች ነው!\nኪሳራ፦ " + Math.abs(profit).toFixed(2) + " ETB\n\nቢሆንም ይቀጥሉ? (ሽያጩ «ከመግዣ በታች» ተብሎ ከስምዎ ጋር ይመዘገባል)");
+      if (!ok) {
+        delete posSessionBatches[item.id];
+        recomputeProfitsForItem(item.id);
+        return;
+      }
+    }
     posCart.push({
       cartLineId: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       id: item.id, name: item.name, qty, sellPrice: sell, subtotal: enteredQty * enteredSell, profit,
@@ -2286,12 +2409,18 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       }
     }
 
+    const old = { qty: line.qty, sellPrice: line.sellPrice, displayQty: line.displayQty, displaySellPrice: line.displaySellPrice, subtotal: line.subtotal };
     line.qty = newQty;
     line.sellPrice = newPrice;
     line.displayQty = newDisplayQty;
     line.displaySellPrice = newDisplayPrice;
     line.subtotal = newDisplayQty * newDisplayPrice;
     recomputeProfitsForItem(line.id);
+    if (line.profit < -0.005 && !confirm("⚠️ ማስጠንቀቂያ፦ ይህ የመሸጫ ዋጋ ከመግዣ ዋጋ በታች ነው!\nኪሳራ፦ " + Math.abs(line.profit).toFixed(2) + " ETB\n\nቢሆንም ይቀጥሉ?")) {
+      Object.assign(line, old);
+      recomputeProfitsForItem(line.id);
+      return;
+    }
     updateCartTable();
     showToast("ተስተካክሏል!");
   }
@@ -2336,7 +2465,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     let sub = 0;
     tb.innerHTML = posCart.map((c) => {
       sub += c.subtotal;
-      return `<tr><td><b>${escapeHTML(c.name)}</b></td><td>${c.displayQty} ${escapeHTML(c.displayUnit || "")}</td><td>${Number(c.displaySellPrice).toFixed(2)}</td>
+      return `<tr><td><b>${escapeHTML(c.name)}</b>${c.profit < -0.005 ? ' <span title="ከመግዣ በታች" style="color:#dc3545;">⚠️</span>' : ""}</td><td>${c.displayQty} ${escapeHTML(c.displayUnit || "")}</td><td>${Number(c.displaySellPrice).toFixed(2)}</td>
         <td>${Number(c.subtotal).toFixed(2)}</td>
         <td class="action-btns">
           <button class="btn-secondary" onclick="SBM.sales.editCartLine('${c.cartLineId}')">✏️</button>
@@ -2394,6 +2523,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const cn = document.getElementById("posCustomerName") ? document.getElementById("posCustomerName").value.trim() : "";
     const bankRefEl = document.getElementById("posBankRef");
     const bankRefInput = bankRefEl ? bankRefEl.value.trim() : "";
+    const bankNameInput = readBank("posBankName", "posBankOther");
 
     // ክፍያውን በካሽ / ባንክ / ዱቤ መከፋፈል
     let cash = 0, bank = 0, credit = 0;
@@ -2414,6 +2544,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       return alert("እባክዎን የክፍያ ሁኔታ ይምረጡ!");
     }
 
+    if (bank > 0 && !bankNameInput) return alert("በባንክ ለተከፈለ ክፍያ ደንበኛው የላከበትን ባንክ መምረጥ ግዴታ ነው!");
     if (credit > 0 && !cn) return alert("ለዱቤ የደንበኛውን ስም ማስገባት ግዴታ ነው!");
     let dueDate = "";
     if (credit > 0) dueDate = getSelectedEthDateValue("posDue") || getCurrentEthYMD();
@@ -2446,10 +2577,17 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       vatApplied: !!DB.vatEnabled,
       total: grand, cashAmount: cash, bankAmount: bank, creditAmount: credit,
       bankRef: bank > 0 ? bankRefInput : "",
+      bankName: bank > 0 ? bankNameInput : "",
       seller: SBM.auth.currentName(),
+      belowCost: posCart.some((c) => c.profit < -0.005),
+      lossAmount: round2(posCart.reduce((a, c) => a + (c.profit < -0.005 ? -c.profit : 0), 0)),
       profit, date: getEthDateStr(),
       payMode, customer: cn || (payMode === "bank" ? "የባንክ ደንበኛ" : "የካሽ ደንበኛ"),
     });
+    const lastSale = DB.sales[DB.sales.length - 1];
+    if (lastSale.belowCost) {
+      SBM.app.addAlert("belowCost", "ከመግዣ በታች ሸጠ፦ " + summary + " — ደንበኛ፡ " + lastSale.customer, lastSale.lossAmount);
+    }
     SBM.database.save("stock");
     SBM.database.save("sales");
     resetSession();
@@ -2460,7 +2598,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   global.SBM = global.SBM || {};
   global.SBM.sales = {
     renderUI, onItemChange, onUnitChoiceChange, addToCart, updateUnitChoices, removeFromCart, editCartLine, updateCartTable, toggleCreditFields, updateMixedRemainder, processSale,
-    resetSession, getCart: () => posCart,
+    resetSession, getCart: () => posCart, BANKS, bankSelectHTML, readBank,
   };
 })(window);
 
@@ -2561,7 +2699,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
           <option value="bank">🏦 በባንክ</option>
         </select>
       </div>
-      <div class="form-group hidden" id="payRefGroup"><label>🏦 የባንክ ማስተላለፊያ ማጣቀሻ ቁጥር / ባንክ (አማራጭ)</label><input type="text" id="payRef" placeholder="ምሳሌ፡ ንግድ ባንክ FT2610..."></div>
+      <div class="form-group hidden" id="payRefGroup"><label>🏦 ደንበኛው የላከበት ባንክ (ግዴታ — ለኦዲት)</label>${SBM.sales.bankSelectHTML("payBank", "payBankOther")}
+        <label style="margin-top:8px;">የማስተላለፊያ ማጣቀሻ ቁጥር (አማራጭ)</label><input type="text" id="payRef" placeholder="ምሳሌ፡ FT2610..."></div>
       <div style="display:flex;gap:10px;margin-top:15px;">
         <button class="btn-secondary" style="flex:1;padding:10px;" onclick="SBM.app.openPage('credit')">⬅ ተመለስ</button>
         <button class="btn-success" style="flex:1;padding:10px;font-weight:bold;" onclick="SBM.credit.confirmPayDebt(${jsAttr(c.customer)})">✔ ክፍያ መዝግብ</button>
@@ -2583,16 +2722,18 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const method = document.getElementById("payMethod").value === "bank" ? "bank" : "cash";
     const refEl = document.getElementById("payRef");
     const ref = method === "bank" && refEl ? refEl.value.trim() : "";
+    const bankName = method === "bank" ? SBM.sales.readBank("payBank", "payBankOther") : "";
+    if (method === "bank" && !bankName) return alert("በባንክ ለተከፈለ ክፍያ ደንበኛው የላከበትን ባንክ መምረጥ ግዴታ ነው!");
 
     recordTransaction(
       c.customer,
       method === "bank" ? "ክፍያ ፈጸመ (በባንክ)" : "ክፍያ ፈጸመ (በካሽ)",
-      ref ? "የባንክ ማጣቀሻ፡ " + ref : "የከፈለው ገንዘብ",
+      method === "bank" ? ("🏦 " + bankName + (ref ? " · " + ref : "")) : "የከፈለው ገንዘብ",
       0, paid, "", method
     );
     // ለሪፖርት፦ የተሰበሰበ ዱቤ በካሽ ወይም በባንክ ተለይቶ ይመዘገባል (አዲስ ሽያጭ አይደለም — ገቢ ብቻ)
     if (!DB.debtPayments) DB.debtPayments = [];
-    DB.debtPayments.push({ id: Date.now(), date: getEthDateStr(), customer: c.customer, amount: paid, method, ref, by: SBM.auth.currentName() });
+    DB.debtPayments.push({ id: Date.now(), date: getEthDateStr(), customer: c.customer, amount: paid, method, ref, bankName, by: SBM.auth.currentName() });
     SBM.database.save("debtPayments");
 
     if (c.amount <= 0.005) {
@@ -2670,7 +2811,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
    */
   function allDebtPayments() {
     const list = (DB.debtPayments || []).map((p) => ({
-      date: p.date, customer: p.customer, amount: Number(p.amount || 0), method: p.method === "bank" ? "bank" : "cash", ref: p.ref || "", by: p.by || "",
+      date: p.date, customer: p.customer, amount: Number(p.amount || 0), method: p.method === "bank" ? "bank" : "cash", ref: p.ref || "", bankName: p.bankName || "", by: p.by || "",
     }));
     const hist = DB.creditHistory || {};
     Object.keys(hist).forEach((name) => {
@@ -2687,22 +2828,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     let cash = 0, bank = 0;
     list.forEach((p) => { if (p.method === "bank") bank += p.amount; else cash += p.amount; });
     return { cash, bank };
-  }
-
-  /** ተመላሾችን (DB.returns — returns.js) ያጠቃልላል፦ ጠቅላላ፣ ቫት፣ የተቀነሰ ትርፍ፣ የተመለሰ ካሽ/ባንክ፣ ከዱቤ የተቀነሰ */
-  function sumReturns(list) {
-    const t = { count: 0, total: 0, subtotal: 0, vat: 0, profit: 0, cash: 0, bank: 0, credit: 0 };
-    (list || []).forEach((r) => {
-      t.count += 1;
-      t.total += Number(r.total || 0);
-      t.subtotal += Number(r.subtotal || 0);
-      t.vat += Number(r.vat || 0);
-      t.profit += Number(r.profitReversed || 0);
-      t.cash += Number(r.refundCash || 0);
-      t.bank += Number(r.refundBank || 0);
-      t.credit += Number(r.creditReduced || 0);
-    });
-    return t;
   }
 
   function payLabel(s) {
@@ -2769,6 +2894,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     if (!d || a <= 0) return alert("እባክዎን የወጪ ምክንያትና ትክክለኛ መጠን ያስገቡ!");
     DB.expenses.push({ id: Date.now(), desc: d, amount: a, date: getEthDateStr(), by: SBM.auth.currentName() });
     SBM.database.save("expenses");
+    SBM.app.addAlert("expense", "ወጪ መዘገበ፦ " + d, a);
     showToast("ወጪው ተመዝግቧል!");
     SBM.app.openPage("expenses");
   }
@@ -2804,15 +2930,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       bySeller[n].cash += p.cash; bySeller[n].bank += p.bank; bySeller[n].credit += p.credit;
     });
     const col = sumPayments(tcol);
-    const tretList = (DB.returns || []).filter((r) => r.date === today);
-    const tret = sumReturns(tretList);
-    tp -= tret.profit; // ከተመላሽ የተቀነሰ ትርፍ
-    tv -= tret.vat;    // ከተመላሽ የተቀነሰ ቫት
     const teA = te.reduce((s, e) => s + e.amount, 0);
-    const totalCash = salesCash + col.cash - tret.cash;
-    const totalBank = salesBank + col.bank - tret.bank;
+    const totalCash = salesCash + col.cash;
+    const totalBank = salesBank + col.bank;
     const net = totalCash - teA;
-    const retRows = tretList.map((r) => `<tr><td><b>${escapeHTML(r.customer)}</b>${r.by ? "<br><small>👤 " + escapeHTML(r.by) + "</small>" : ""}</td><td><small>${escapeHTML((r.lines || []).map((l) => l.name + " x" + l.displayQty + (l.displayUnit || "")).join(", "))}</small></td><td>${Number(r.total || 0).toFixed(2)} ETB<br><small>${r.type === "void" ? "ስረዛ" : "ተመላሽ"}</small></td></tr>`).join("");
     let rows = ts.map((s) => {
       const p = saleParts(s);
       const detail = (s.payMode === "mixed" || s.payMode === "partial")
@@ -2822,7 +2943,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       <td>${payLabel(s)}${detail}</td></tr>`;
     }).join("");
     if (ts.length === 0) rows = '<tr><td colspan="4" style="text-align:center;">ለዛሬ እስካሁን ምንም ሽያጭ አልተመዘገበም</td></tr>';
-    let colRows = tcol.map((p) => `<tr><td><b>${escapeHTML(p.customer)}</b>${p.by ? "<br><small>👤 " + escapeHTML(p.by) + "</small>" : ""}</td><td>${p.amount.toFixed(2)} ETB</td><td>${p.method === "bank" ? "🏦 ባንክ" : "💵 ካሽ"}${p.ref ? "<br><small>" + escapeHTML(p.ref) + "</small>" : ""}</td></tr>`).join("");
+    let colRows = tcol.map((p) => `<tr><td><b>${escapeHTML(p.customer)}</b>${p.by ? "<br><small>👤 " + escapeHTML(p.by) + "</small>" : ""}</td><td>${p.amount.toFixed(2)} ETB</td><td>${p.method === "bank" ? "🏦 ባንክ" : "💵 ካሽ"}${(p.bankName || p.ref) ? "<br><small>" + escapeHTML([p.bankName, p.ref].filter(Boolean).join(" · ")) + "</small>" : ""}</td></tr>`).join("");
     if (tcol.length === 0) colRows = '<tr><td colspan="3" style="text-align:center;">ዛሬ ምንም የዱቤ ክፍያ አልተሰበሰበም</td></tr>';
     const sellerNames = Object.keys(bySeller);
     let sellerRows = sellerNames.map((n) => {
@@ -2837,13 +2958,12 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       ${sumRow("💳 የዛሬ የዱቤ ሽያጭ:", tcr, "red")}
       ${sumRow("📥 ዛሬ ከዱቤ የተሰበሰበ በካሽ:", col.cash, "green")}
       ${sumRow("📥 ዛሬ ከዱቤ የተሰበሰበ በባንክ:", col.bank, "#0A5EB0")}
-      ${tret.count > 0 ? sumRow("↩️ ዛሬ የተመለሰ/የተሰረዘ ዕቃ (ጠቅላላ):", tret.total, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ በካሽ የተመለሰ ገንዘብ:", tret.cash, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ በባንክ የተመለሰ ገንዘብ:", tret.bank, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ ከዱቤ ዕዳ የተቀነሰ:", tret.credit, "#dc3545") : ""}
       ${(DB.vatEnabled || tv > 0) ? sumRow("🧾 የተሰበሰበ 15% ቫት:", tv, "#0A5EB0") : ""}
       ${sumRow("💸 የዛሬ ወጪ:", teA, "orange")}
       ${profitRow("📈 የዛሬ የተጣራ ትርፍ:", "📉 የዛሬ ኪሳራ:", tp - teA)}
       <hr style="margin:8px 0;">
-      ${sumRow("💰 ዛሬ በካሽ የገባ ጠቅላላ (ሽያጭ + የተሰበሰበ ዱቤ − ተመላሽ):", totalCash, "green")}
-      ${sumRow("🏦 ዛሬ በባንክ የገባ ጠቅላላ (ሽያጭ + የተሰበሰበ ዱቤ − ተመላሽ):", totalBank, "#0A5EB0")}
+      ${sumRow("💰 ዛሬ በካሽ የገባ ጠቅላላ (ሽያጭ + የተሰበሰበ ዱቤ):", totalCash, "green")}
+      ${sumRow("🏦 ዛሬ በባንክ የገባ ጠቅላላ (ሽያጭ + የተሰበሰበ ዱቤ):", totalBank, "#0A5EB0")}
       ${sumRow("💰 ዛሬ የገባ ጠቅላላ (ካሽ + ባንክ):", totalCash + totalBank, "#28a745", true)}
       ${sumRow("💵 የዛሬ የተጣራ ካሽ (ከወጪ በኋላ):", net, "#0A5EB0")}
       ${sumRow("✅ ዛሬ ከወጪ በኋላ የቀረ ጠቅላላ (ካሽ + ባንክ − ወጪ):", totalCash + totalBank - teA, remColor(totalCash + totalBank - teA), true)}
@@ -2852,8 +2972,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       <div style="max-height:160px;overflow-y:auto;"><table><thead><tr><th>ሻጭ</th><th>ብዛት</th><th>ጠቅላላ</th></tr></thead><tbody>${sellerRows}</tbody></table></div>
       <h4 style="margin-top:12px;">🛒 የዛሬ የተሸጡ እቃዎች ዝርዝር</h4>
       <div style="max-height:200px;overflow-y:auto;"><table><thead><tr><th>ደንበኛ</th><th>ዕቃዎች</th><th>ዋጋ</th><th>ሁኔታ</th></tr></thead><tbody>${rows}</tbody></table></div>
-      ${tret.count > 0 ? `<h4 style="margin-top:12px;">↩️ የዛሬ ተመላሾች</h4>
-      <div style="max-height:160px;overflow-y:auto;"><table><thead><tr><th>ደንበኛ</th><th>ዕቃዎች</th><th>ተመላሽ</th></tr></thead><tbody>${retRows}</tbody></table></div>` : ""}
       <h4 style="margin-top:12px;">📥 ዛሬ የተሰበሰበ የዱቤ ክፍያ</h4>
       <div style="max-height:160px;overflow-y:auto;"><table><thead><tr><th>ደንበኛ</th><th>መጠን</th><th>በምን</th></tr></thead><tbody>${colRows}</tbody></table></div>
       <button class="btn-secondary" style="margin-top:10px;width:100%;" onclick="SBM.app.printModalContent()">🖨️ የዕለት ሪፖርት አትም</button>`;
@@ -2893,18 +3011,14 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     });
     const col = sumPayments(allDebtPayments().filter((p) => inMonth(p.date, y, mo)));
     const expenses = (DB.expenses || []).filter((e) => inMonth(e.date, y, mo)).reduce((s, e) => s + Number(e.amount || 0), 0);
-    const rt = sumReturns((DB.returns || []).filter((r) => inMonth(r.date, y, mo)));
-    const totalCash = salesCash + col.cash - rt.cash;
-    const totalBank = salesBank + col.bank - rt.bank;
+    const totalCash = salesCash + col.cash;
+    const totalBank = salesBank + col.bank;
     return {
       year: y, month: mo, monthName: ethMonthsAmharic[mo - 1], count,
-      salesCash, salesBank, salesCredit, salesTotal,
-      vat: vat - rt.vat,          // ከተመላሽ በኋላ የተጣራ ቫት
-      profit: profit - rt.profit, // ከተመላሽ በኋላ የተጣራ ትርፍ (ከወጪ በፊት)
-      retCount: rt.count, retTotal: rt.total, retCash: rt.cash, retBank: rt.bank, retCredit: rt.credit,
+      salesCash, salesBank, salesCredit, salesTotal, vat, profit,
       collectedCash: col.cash, collectedBank: col.bank,
       totalCash, totalBank, expenses,
-      netCash: totalCash - expenses, netProfit: profit - rt.profit - expenses,
+      netCash: totalCash - expenses, netProfit: profit - expenses,
       bySeller,
     };
   }
@@ -3003,10 +3117,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       ${sumRow("💳 በዱቤ የተሸጠ:", r.salesCredit, "red")}
       ${sumRow("📥 ከዱቤ የተሰበሰበ በካሽ:", r.collectedCash, "green")}
       ${sumRow("📥 ከዱቤ የተሰበሰበ በባንክ:", r.collectedBank, "#0A5EB0")}
-      ${Number(r.retCount || 0) > 0 ? sumRow("↩️ የተመለሰ/የተሰረዘ ዕቃ (" + r.retCount + "):", r.retTotal, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ በካሽ የተመለሰ ገንዘብ:", r.retCash, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ በባንክ የተመለሰ ገንዘብ:", r.retBank, "#dc3545") + sumRow("&nbsp;&nbsp;↩️ ከዱቤ ዕዳ የተቀነሰ:", r.retCredit, "#dc3545") : ""}
       <hr style="margin:8px 0;">
-      ${sumRow("💰 ጠቅላላ በካሽ የገባ (ሽያጭ + የተሰበሰበ ዱቤ − ተመላሽ):", r.totalCash, "green", true)}
-      ${sumRow("🏦 ጠቅላላ በባንክ የገባ (ሽያጭ + የተሰበሰበ ዱቤ − ተመላሽ):", r.totalBank, "#0A5EB0", true)}
+      ${sumRow("💰 ጠቅላላ በካሽ የገባ (ሽያጭ + የተሰበሰበ ዱቤ):", r.totalCash, "green", true)}
+      ${sumRow("🏦 ጠቅላላ በባንክ የገባ (ሽያጭ + የተሰበሰበ ዱቤ):", r.totalBank, "#0A5EB0", true)}
       ${sumRow("💰 ጠቅላላ የገባ (ካሽ + ባንክ):", Number(r.totalCash) + Number(r.totalBank), "#28a745", true)}
       <hr style="margin:8px 0;">
       ${sumRow("🛒 ጠቅላላ ሽያጭ (" + r.count + " ሽያጮች):", r.salesTotal, "inherit")}
@@ -3029,11 +3142,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     return `<div style="margin-bottom:10px;"><select id="salesFilterSelect" onchange="SBM.report.filterSalesHistory(this.value)" style="width:100%;padding:8px;font-weight:bold;">
       <option value="all">ሁሉንም ሽያጮች አሳይ</option><option value="cash">💵 በካሽ ብቻ</option><option value="bank">🏦 በባንክ ብቻ</option><option value="credit">💳 በዱቤ ሽያጭ</option><option value="mixed">🌗 የተቀላቀለ</option>
       </select></div>
-      <div style="max-height:300px;overflow-y:auto;"><table><thead><tr><th>ቀን</th><th>የደንበኛ/ሁኔታ</th><th>የተሸጡ ዕቃዎች</th><th>ጠቅላላ (ከቫት ጋር)</th></tr></thead>
+      <div style="max-height:300px;overflow-y:auto;"><table><thead><tr><th>ቀን</th><th>የደንበኛ/ሁኔታ</th><th>የተሸጡ ዕቃዎች</th><th>ጠቅላላ (ከቫት ጋር)</th><th></th></tr></thead>
       <tbody id="salesHistoryTableBody">${generateSalesHistoryRows(DB.sales || [])}</tbody></table></div>`;
   }
   function generateSalesHistoryRows(list) {
-    if (!list || list.length === 0) return '<tr><td colspan="4" style="text-align:center;">ምንም የተመዘገበ የሽያጭ ታሪክ የለም</td></tr>';
+    if (!list || list.length === 0) return '<tr><td colspan="5" style="text-align:center;">ምንም የተመዘገበ የሽያጭ ታሪክ የለም</td></tr>';
     return list.slice().reverse().map((s) => {
       let tag = s.payMode === "cash" ? '<span style="color:green;font-weight:bold;">[ካሽ]</span>'
         : s.payMode === "bank" ? '<span style="color:#0A5EB0;font-weight:bold;">[ባንክ]</span>'
@@ -3042,20 +3155,135 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       if (s.payMode === "mixed" || s.payMode === "partial") {
         const pp = saleParts(s);
         tag += `<br><small>ካሽ ${pp.cash.toFixed(2)} · ባንክ ${pp.bank.toFixed(2)} · ዱቤ ${pp.credit.toFixed(2)}</small>`;
-      } else if (s.payMode === "bank" && s.bankRef) {
-        tag += `<br><small>${escapeHTML(s.bankRef)}</small>`;
+      } else if (s.payMode === "bank" && !(s.bankName || s.bankRef)) {
+        tag += "";
       }
+      if ((s.bankName || s.bankRef) && Number(s.bankAmount || 0) > 0) {
+        tag += `<br><small>🏦 ${escapeHTML(s.bankName || "")}${s.bankRef ? " · " + escapeHTML(s.bankRef) : ""}</small>`;
+      }
+      if (s.belowCost) tag += `<br><small style="color:#dc3545;font-weight:bold;">⚠️ ከመግዣ በታች የተሸጠ (ኪሳራ ${Number(s.lossAmount || 0).toFixed(2)})</small>`;
       const tv = s.total !== undefined ? s.total : (s.subtotal ? s.subtotal * 1.15 : 0);
-      let retInfo = "";
-      if (SBM.returns) {
-        const st = SBM.returns.saleStatus(s);
-        if (st.status === "full") retInfo = '<br><small style="color:#dc3545;font-weight:bold;">❌ ተሰርዟል/ተመልሷል</small>';
-        else if (st.status === "partial") retInfo = `<br><small style="color:orange;font-weight:bold;">↩️ ተመላሽ ${st.total.toFixed(2)}</small>`;
-        if (st.status !== "full" && SBM.auth.isAdmin()) retInfo += `<br><button class="btn-secondary" style="padding:3px 8px;font-size:11px;margin-top:4px;" onclick="SBM.returns.openSale(${Number(s.id)})">↩️ ተመላሽ</button>`;
-      }
       return `<tr><td><small>${escapeHTML(s.date)}</small></td><td><b>${escapeHTML(s.customer)}</b>${s.seller ? "<br><small>👤 " + escapeHTML(s.seller) + "</small>" : ""}<br>${tag}</td>
-        <td><small>${escapeHTML(s.summaryName)}</small></td><td><b>${Number(tv).toFixed(2)} ETB</b>${retInfo}</td></tr>`;
+        <td><small>${escapeHTML(s.summaryName)}</small></td><td><b>${Number(tv).toFixed(2)} ETB</b></td>
+        <td>${(!SBM.auth.isAdmin() && saleAgeDays(s) > RETURN_DAYS_LIMIT) ? '<small>🔒 አድሚን</small>' : `<button class="btn-danger" style="padding:4px 8px;font-size:12px;" onclick="SBM.report.returnSale(${Number(s.id)})">↩️ ተመለሰ</button>`}</td></tr>`;
     }).join("");
+  }
+
+  function renderAlertsUI() {
+    const list = (DB.alerts || []).slice().reverse();
+    const unread = list.filter((a) => !a.read).length;
+    const icon = (t) => (t === "belowCost" ? "⚠️" : t === "return" ? "↩️" : t === "expense" ? "💸" : "🔔");
+    const rows = list.length === 0
+      ? '<tr><td colspan="2" style="text-align:center;">ምንም ማሳወቂያ የለም</td></tr>'
+      : list.map((a) => `<tr style="${a.read ? "opacity:.6;" : "font-weight:600;"}"><td><small>${escapeHTML(a.date)}</small><br><small>👤 ${escapeHTML(a.by || "")}</small></td>
+        <td>${icon(a.type)} ${escapeHTML(a.text || "")}${a.amount ? "<br><b>" + Number(a.amount).toFixed(2) + " ETB</b>" : ""}${a.read ? "" : ' <span class="overdue-badge">አዲስ</span>'}</td></tr>`).join("");
+    return `<div class="summary-box"><b>${unread} ያልተነበበ ማሳወቂያ</b></div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.report.markAllAlertsRead()">✔ ሁሉንም እንደተነበበ ምልክት አድርግ</button>
+      <div style="max-height:360px;overflow-y:auto;"><table><thead><tr><th>መቼ/ማን</th><th>ዝርዝር</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  function markAllAlertsRead() {
+    if (!SBM.utils.requireAdmin()) return;
+    (DB.alerts || []).forEach((a) => { a.read = true; });
+    SBM.database.save("alerts");
+    SBM.app.renderDashboardMenu();
+    SBM.app.openPage("alerts");
+  }
+
+  const RETURN_DAYS_LIMIT = 3;
+  function saleAgeDays(s) {
+    const t = Number(s.id);
+    return t > 0 ? (Date.now() - t) / 86400000 : 0;
+  }
+  function renderReturnsLogUI() {
+    const list = (DB.returns || []).slice().reverse();
+    const total = list.reduce((a, r) => a + Number(r.amount || 0), 0);
+    const rows = list.length === 0
+      ? '<tr><td colspan="4" style="text-align:center;">ምንም የተመላሽ መዝገብ የለም</td></tr>'
+      : list.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br><small>👤 ${escapeHTML(r.by || "")}${r.role === "admin" ? " (አድሚን)" : ""}</small></td>
+        <td><b>${escapeHTML(r.customer || "")}</b><br><small>የሽያጭ ቀን፡ ${escapeHTML(r.saleDate || "")}</small></td>
+        <td><small>${escapeHTML(r.items || "")}</small>${r.creditReduced > 0 ? "<br><small>💳 ዕዳ ቀንሷል " + Number(r.creditReduced).toFixed(2) + "</small>" : ""}</td>
+        <td><b>${Number(r.amount || 0).toFixed(2)}</b><br><small>${r.full ? "ሙሉ" : "ከፊል"}</small></td></tr>`).join("");
+    return `<div class="summary-box"><b>ጠቅላላ የተመለሰ፦ ${total.toFixed(2)} ETB</b> (${list.length} መዝገብ)</div>
+      <div style="max-height:380px;overflow-y:auto;"><table><thead><tr><th>መቼ/ማን</th><th>ደንበኛ</th><th>የተመለሰ እቃ</th><th>ብር</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  /** የተመለሰ እቃ፦ ከሽያጭ ውስጥ አንድ መስመር (ወይም ሁሉንም) ይሰርዛል፣ እቃውን ወደ ስቶክ ይመልሳል፣ የዱቤ ክፍል ካለ ከደንበኛው ዕዳ ይቀንሳል። */
+  function returnSale(id) {
+    if (!SBM.auth || !SBM.auth.getSession()) return;
+    const sale = (DB.sales || []).find((x) => Number(x.id) === Number(id));
+    if (!sale) return;
+    if (!SBM.auth.isAdmin() && saleAgeDays(sale) > RETURN_DAYS_LIMIT) {
+      return alert("ይህ ሽያጭ ከ" + RETURN_DAYS_LIMIT + " ቀን በላይ ሆኖታል። ተመላሽ ማስተካከል የሚችለው አድሚን ብቻ ነው።");
+    }
+    const items = sale.items || [];
+    let idxs;
+    if (items.length <= 1) {
+      if (!confirm("ይህ ሽያጭ ሙሉ በሙሉ ይመለስ? (እቃው ወደ ስቶክ ይመለሳል፣ ሽያጩ ይሰረዛል)")) return;
+      idxs = items.map((_, i) => i);
+    } else {
+      const list = items.map((c, i) => (i + 1) + ". " + c.name + " (" + c.displayQty + " " + (c.displayUnit || "") + ")").join("\n");
+      const ans = prompt("የትኛው እቃ ተመለሰ? ቁጥሩን ያስገቡ (ሁሉንም ለመመለስ 0 ያስገቡ)፡\n\n" + list, "0");
+      if (ans === null) return;
+      const n = parseInt(ans, 10);
+      if (isNaN(n) || n < 0 || n > items.length) return alert("ትክክለኛ ቁጥር ያስገቡ!");
+      idxs = n === 0 ? items.map((_, i) => i) : [n - 1];
+    }
+    if (idxs.length === 0) return;
+
+    const vatRate = sale.vatApplied === false ? 0 : (Number(sale.subtotal) > 0 ? Number(sale.vatAmount || 0) / Number(sale.subtotal) : 0);
+    const retLines = idxs.map((i) => items[i]);
+    const retSub = retLines.reduce((a, c) => a + Number(c.subtotal || 0), 0);
+    const retVat = retSub * vatRate;
+    const retTotal = retSub + retVat;
+    const retProfit = retLines.reduce((a, c) => a + Number(c.profit || 0), 0);
+    const oldTotal = Number(sale.total || 0);
+    const ratio = idxs.length === items.length || oldTotal <= 0 ? 1 : Math.min(1, retTotal / oldTotal);
+
+    // 1) እቃውን ወደ ስቶክ መመለስ
+    retLines.forEach((c) => {
+      const si = (DB.stock || []).find((x) => x.id === c.id);
+      if (!si) return;
+      const q = Number(c.qty) || 0;
+      const buy = q > 0 ? Math.max(0, (Number(c.sellPrice) * q - Number(c.profit || 0)) / q) : 0;
+      si.qty = (Number(si.qty) || 0) + q;
+      if (!si.batches) si.batches = [];
+      si.batches.unshift({ qty: q, buyPrice: buy });
+    });
+
+    // 2) ዱቤ ካለ ከደንበኛው ዕዳ መቀነስ
+    const credit = Number(sale.creditAmount || 0);
+    const creditCut = Math.round(credit * ratio * 100) / 100;
+    if (creditCut > 0 && sale.customer && SBM.credit) {
+      SBM.credit.recordTransaction(sale.customer, "እቃ መለሰ", retLines.map((c) => c.name).join(", "), -creditCut, 0, "");
+    }
+
+    // 3) ሽያጩን ማስተካከል ወይም መሰረዝ
+    if (ratio >= 1) {
+      DB.sales = DB.sales.filter((x) => Number(x.id) !== Number(id));
+    } else {
+      sale.items = items.filter((_, i) => !idxs.includes(i));
+      sale.subtotal = Math.round((Number(sale.subtotal) - retSub) * 100) / 100;
+      sale.vatAmount = Math.round((Number(sale.vatAmount || 0) - retVat) * 100) / 100;
+      sale.total = Math.round((oldTotal - retTotal) * 100) / 100;
+      sale.profit = Math.round((Number(sale.profit || 0) - retProfit) * 100) / 100;
+      sale.cashAmount = Math.round(Number(sale.cashAmount || 0) * (1 - ratio) * 100) / 100;
+      sale.bankAmount = Math.round(Number(sale.bankAmount || 0) * (1 - ratio) * 100) / 100;
+      sale.creditAmount = Math.round((credit - creditCut) * 100) / 100;
+      sale.summaryName = sale.items.map((c) => c.name + " (x" + c.displayQty + (c.displayUnit || "") + " @ " + c.displaySellPrice + "ብር)").join(", ");
+    }
+    if (!Array.isArray(DB.returns)) DB.returns = [];
+    DB.returns.push({
+      id: Date.now(), date: getEthDateStr(), saleId: sale.id, saleDate: sale.date, customer: sale.customer || "",
+      items: retLines.map((c) => c.name + " (x" + c.displayQty + (c.displayUnit || "") + ")").join(", "),
+      amount: Math.round(retTotal * 100) / 100, creditReduced: creditCut, full: ratio >= 1,
+      by: SBM.auth.currentName(), role: SBM.auth.isAdmin() ? "admin" : "staff",
+    });
+    SBM.app.addAlert("return", "የተመለሰ እቃ መዘገበ፦ " + retLines.map((c) => c.name).join(", ") + " — ደንበኛ፡ " + (sale.customer || ""), retTotal);
+    SBM.database.save("returns");
+    SBM.database.save("stock");
+    SBM.database.save("sales");
+    showToast("እቃው ተመልሷል፤ ስቶክ ተስተካክሏል ✅");
+    SBM.app.openPage("salesHistory");
   }
   function filterSalesHistory(mode) {
     const sales = DB.sales || [];
@@ -3083,9 +3311,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const sales = (DB.sales || []).filter((s) => (s.date || "").includes(mName) && (s.date || "").includes(String(y)));
     let sub = 0, vat = 0, tot = 0;
     sales.forEach((s) => { sub += Number(s.subtotal || 0); vat += Number(s.vatAmount || 0); tot += Number(s.total || 0); });
-    // በዚህ ወር የተመዘገቡ ተመላሾች ከሽያጭ እና ከቫት ይቀነሳሉ
-    const vrt = sumReturns((DB.returns || []).filter((r) => (r.date || "").includes(mName) && (r.date || "").includes(String(y))));
-    sub -= vrt.subtotal; vat -= vrt.vat; tot -= vrt.total;
     const key = y + "-" + m;
     const inputVat = Number((DB.vatInputs || {})[key] || 0);
     const net = vat - inputVat;
@@ -3094,7 +3319,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       <p>ሽያጭ (ያለ ቫት): <b>${sub.toFixed(2)} ETB</b></p>
       <p>የተሰበሰበ ቫት 15% (Output VAT): <b style="color:#0A5EB0;">${vat.toFixed(2)} ETB</b></p>
       <p>ጠቅላላ ሽያጭ (ከቫት ጋር): <b>${tot.toFixed(2)} ETB</b></p>
-      ${vrt.count > 0 ? `<p style="font-size:12px;color:#dc3545;">↩️ ከላይ ያሉት ቁጥሮች ተመላሽን ቀንሰዋል፦ ${vrt.total.toFixed(2)} ETB (ቫት ${vrt.vat.toFixed(2)})</p>` : ""}
       <div class="form-group" style="margin-top:10px;"><label>የግብዓት ቫት (Input VAT) — ከአቅራቢዎች የቫት ደረሰኝ ካለ ብቻ</label>
         <input type="number" id="vatInputAmt" value="${inputVat ? inputVat : ""}" placeholder="0.00" onchange="SBM.report.saveVatInput()"></div>
       <hr><p style="font-size:17px;color:${net >= 0 ? "#dc3545" : "#28a745"}"><b>የሚከፈል ቫት (Output − Input): ${net.toFixed(2)} ETB</b></p>
@@ -3121,19 +3345,17 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   function renderReportsUI() {
     const sales = DB.sales || [];
     const ts = sales.reduce((s, x) => s + (x.total || 0), 0);
-    const tr = sumReturns(DB.returns || []);
-    const tp = sales.reduce((s, x) => s + (x.profit || 0), 0) - tr.profit;
+    const tp = sales.reduce((s, x) => s + (x.profit || 0), 0);
     const te = (DB.expenses || []).reduce((s, x) => s + x.amount, 0);
     const td = (DB.credits || []).reduce((s, x) => s + (x.amount || 0), 0);
-    const tv = sales.reduce((s, x) => s + saleVat(x), 0) - tr.vat;
+    const tv = sales.reduce((s, x) => s + saleVat(x), 0);
     let salesCash = 0, salesBank = 0, salesCredit = 0;
     sales.forEach((x) => { const p = saleParts(x); salesCash += p.cash; salesBank += p.bank; salesCredit += p.credit; });
     const col = sumPayments(allDebtPayments());
-    const totalCash = salesCash + col.cash - tr.cash;
-    const totalBank = salesBank + col.bank - tr.bank;
+    const totalCash = salesCash + col.cash;
+    const totalBank = salesBank + col.bank;
     return `<div style="padding:15px;background:rgba(0,0,0,.03);border-radius:12px;line-height:2;">
       <p style="font-size:16px;"><b>💰 ጠቅላላ ሽያጭ (ከቫት ጋር):</b> ${ts.toFixed(2)} ETB</p>
-      ${tr.count > 0 ? `<p style="font-size:15px;">↩️ የተመለሰ/የተሰረዘ (${tr.count}): <b style="color:#dc3545;">${tr.total.toFixed(2)} ETB</b></p><p style="font-size:15px;">✅ ከተመላሽ በኋላ የተጣራ ሽያጭ: <b>${(ts - tr.total).toFixed(2)} ETB</b></p>` : ""}
       <p style="font-size:15px;">💵 በካሽ የተሸጠ: <b style="color:green;">${salesCash.toFixed(2)} ETB</b></p>
       <p style="font-size:15px;">🏦 በባንክ የገባ (ሽያጭ): <b style="color:#0A5EB0;">${salesBank.toFixed(2)} ETB</b></p>
       <p style="font-size:15px;">💳 በዱቤ የተሸጠ: <b style="color:red;">${salesCredit.toFixed(2)} ETB</b></p>
@@ -3158,407 +3380,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   global.SBM = global.SBM || {};
   global.SBM.report = {
     renderExpenseUI, addExpense, deleteExpense,
-    renderDailyReportUI, renderSalesHistoryUI, filterSalesHistory,
+    renderDailyReportUI, renderSalesHistoryUI, filterSalesHistory, returnSale, renderReturnsLogUI, renderAlertsUI, markAllAlertsRead,
     renderMonthlyReportUI, updateMonthlyReport, showMonth, closeFinishedMonths, isMonthEndToday, getMonthSummary,
     renderVatReportUI, updateVatReport, saveVatInput,
-    renderReportsUI, saleParts, sumReturns,
+    renderReportsUI, saleParts,
   };
-})(window);
-
-// ==== returns.js ====
-/**
- * returns.js — ተመላሽ ዕቃ እና ሽያጭ መሰረዝ
- *
- * ዲዛይን፦
- *  • ዋናው የሽያጭ መዝገብ (DB.sales) በጭራሽ አይቀየርም — ተመላሾች በተለየ የ"መጨመር ብቻ" መዝገብ (DB.returns)
- *    ይቀመጣሉ። ስለዚህ የደመና ማመሳሰያው ችግር አያመጣም፤ ሁለት ስልኮች በአንድ ጊዜ ተመላሽ ቢመዘግቡ አይጠፉም።
- *  • "ሽያጭ መሰረዝ" = ያልተመለሰውን ቀሪ ዕቃ ሁሉ መመለስ (type: "void")። አንድ ነጠላ የሂሳብ መንገድ ብቻ ነው ያለው።
- *  • አንድ ተመላሽ ሲመዘገብ፦
- *      1) ዕቃው ወደ ስቶክ ይመለሳል (ጤናማ ከሆነ) — በተሸጠበት የትርፍ ስሌት መሰረት የመግዣ ዋጋ ያለው ባች ይጨመራል
- *      2) ከዱቤ ሽያጭ ከሆነ፦ መጀመሪያ የደንበኛው ዕዳ ይቀነሳል
- *      3) የሚቀረው መጠን በካሽ ወይም በባንክ ለደንበኛው ይመለሳል
- *      4) ሪፖርቶች (ዕለት/ወር/ቫት/ጠቅላላ) በ report.js ከዚህ መዝገብ ይቀንሳሉ
- *  • ትርፍ፦ ዕቃው ወደ ስቶክ ከተመለሰ የዚያ ዕቃ ትርፍ ብቻ ይቀነሳል፤ ካልተመለሰ (የተበላሸ) ሙሉ የተመለሰው ዋጋ
- *    ከትርፍ ይቀነሳል (ዕቃውም ገንዘቡም ጠፍቷልና)።
- */
-(function (global) {
-  "use strict";
-  const { DB } = SBM;
-  const { escapeHTML, showToast, getEthDateStr } = SBM.utils;
-
-  const EPS = 0.0001;
-
-  function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
-  function round3(n) { return Math.round((Number(n) || 0) * 1000) / 1000; }
-  function fmt(n) { return Number(n || 0).toFixed(2); }
-
-  function allReturns() {
-    if (!Array.isArray(DB.returns)) DB.returns = [];
-    return DB.returns;
-  }
-
-  function findSale(id) {
-    return (DB.sales || []).find((s) => String(s.id) === String(id));
-  }
-
-  function returnsOfSale(saleId) {
-    return allReturns().filter((r) => String(r.saleId) === String(saleId));
-  }
-
-  // ---------- የሽያጭ መስመሮች እና ቀሪ ብዛት ----------
-
-  function lineKey(it, idx) { return it.cartLineId ? String(it.cartLineId) : "L" + idx; }
-
-  /** ለእያንዳንዱ የሽያጭ መስመር፦ ምን ያህል ተሸጠ፣ ምን ያህል ተመለሰ፣ ምን ያህል ይቀራል (በትንሹ አሃድ) */
-  function saleLines(sale) {
-    const done = {};
-    returnsOfSale(sale.id).forEach((r) => {
-      (r.lines || []).forEach((l) => { done[l.key] = (done[l.key] || 0) + Number(l.qty || 0); });
-    });
-    return (sale.items || []).map((it, idx) => {
-      const key = lineKey(it, idx);
-      const qty = Number(it.qty || 0);
-      const conv = Number(it.convFactor) || 1;
-      const stockItem = (DB.stock || []).find((s) => s.id === it.id);
-      const sellPrice = it.sellPrice !== undefined ? Number(it.sellPrice) : (qty > 0 ? Number(it.subtotal || 0) / qty : 0);
-      const unitProfit = qty > 0 ? Number(it.profit || 0) / qty : 0;
-      const returned = done[key] || 0;
-      const remaining = Math.max(0, qty - returned);
-      const displayUnit = it.displayUnit || (stockItem && stockItem.unit) || "";
-      return { idx, key, itemId: it.id, name: it.name, qty, conv, sellPrice, unitProfit, returned, remaining, displayUnit,
-        soldDisplay: it.displayQty !== undefined ? Number(it.displayQty) : qty };
-    });
-  }
-
-  /** የአንድ ሽያጭ የተመላሽ ሁኔታ — ለሽያጭ ታሪክ እና ለደረሰኝ ጥቅም ላይ ይውላል። */
-  function saleStatus(sale) {
-    const rets = returnsOfSale(sale.id);
-    if (!rets.length) return { status: "none", total: 0, count: 0 };
-    const lines = saleLines(sale);
-    const full = lines.length > 0 && lines.every((l) => l.remaining <= EPS);
-    return { status: full ? "full" : "partial", total: round2(rets.reduce((s, r) => s + Number(r.total || 0), 0)), count: rets.length };
-  }
-
-  /** ከዚህ ሽያጭ የዱቤ ክፍል ውስጥ አሁንም በደንበኛው ላይ ያለ እና ሊቀነስ የሚችል መጠን። */
-  function creditAvailable(sale) {
-    const parts = SBM.report.saleParts(sale);
-    const already = returnsOfSale(sale.id).reduce((s, r) => s + Number(r.creditReduced || 0), 0);
-    const saleCredit = Math.max(0, parts.credit - already);
-    if (saleCredit <= 0.004) return 0;
-    const rec = (DB.credits || []).find((c) => String(c.customer).toLowerCase() === String(sale.customer || "").toLowerCase());
-    return rec ? Math.min(saleCredit, Number(rec.amount || 0)) : 0;
-  }
-
-  /** picks: [{ line, qty }] (qty በትንሹ አሃድ)። የተመላሹን ዋጋ፣ ቫት፣ ትርፍ እና የገንዘብ አመዳደብ ያሰላል። */
-  function calcReturn(sale, picks, restock) {
-    let sub = 0, prof = 0;
-    const lines = picks.map((p) => {
-      const value = round2(p.qty * p.line.sellPrice);
-      const profit = restock ? round2(p.qty * p.line.unitProfit) : value;
-      sub += value; prof += profit;
-      return { key: p.line.key, itemId: p.line.itemId, name: p.line.name, qty: round3(p.qty),
-        displayQty: round3(p.qty / p.line.conv), displayUnit: p.line.displayUnit, value, profit };
-    });
-    sub = round2(sub);
-    const vatApplied = sale.vatApplied !== undefined ? !!sale.vatApplied : Number(sale.vatAmount || 0) > 0;
-    const vat = vatApplied ? round2(sub * 0.15) : 0;
-    const total = round2(sub + vat);
-    const creditReduced = round2(Math.min(total, creditAvailable(sale)));
-    const cashBack = round2(total - creditReduced);
-    return { lines, subtotal: sub, vat, total, profit: round2(prof), creditReduced, cashBack };
-  }
-
-  // ---------- የውስጥ ተግባራት ----------
-
-  function el(id) { return document.getElementById(id); }
-
-  function readRestock() { const e = el("retRestock"); return !e || e.value !== "0"; }
-  function readMethod() { const e = el("retMethod"); return e && e.value === "bank" ? "bank" : "cash"; }
-
-  /**
-   * ከግብዓት ሳጥኖች ተመላሽ ብዛቶችን ያነባል። mode === "void" ከሆነ ቀሪውን ሁሉ ይወስዳል።
-   * strict ከሆነ ስህተት ሲኖር error ይመልሳል፤ ካልሆነ (ለቅድመ እይታ) ልክ ያልሆነውን ችላ ይላል።
-   */
-  function collectPicks(sale, mode, strict) {
-    const picks = [];
-    const lines = saleLines(sale);
-    for (const l of lines) {
-      if (l.remaining <= EPS) continue;
-      let qty = 0;
-      if (mode === "void") {
-        qty = l.remaining;
-      } else {
-        const inp = el("retQty_" + l.idx);
-        const v = inp ? parseFloat(inp.value) : 0;
-        if (!v || isNaN(v) || v <= 0) continue;
-        qty = v * l.conv;
-        if (qty > l.remaining + 0.001) {
-          if (strict) return { picks: [], error: `"${l.name}" — ከቀሪው ብዛት (${round3(l.remaining / l.conv)} ${l.displayUnit}) በላይ መመለስ አይቻልም!` };
-          qty = l.remaining;
-        } else if (qty > l.remaining) {
-          qty = l.remaining;
-        }
-      }
-      if (qty > EPS) picks.push({ line: l, qty });
-    }
-    return { picks, error: "" };
-  }
-
-  function describeLines(lines) {
-    return lines.map((l) => `${l.name} (x${l.displayQty}${l.displayUnit || ""})`).join(", ");
-  }
-
-  function statusTag(sale) {
-    const st = saleStatus(sale);
-    if (st.status === "full") return '<br><span style="color:#dc3545;font-weight:bold;font-size:12px;">❌ ሙሉ በሙሉ ተሰርዟል/ተመልሷል</span>';
-    if (st.status === "partial") return `<br><span style="color:orange;font-weight:bold;font-size:12px;">↩️ በከፊል ተመልሷል (${fmt(st.total)})</span>`;
-    return "";
-  }
-
-  // ---------- ዋናው ገጽ፦ ሽያጭ መምረጫ ----------
-
-  function salesRows(query) {
-    const q = String(query || "").trim().toLowerCase();
-    let list = (DB.sales || []).slice().reverse();
-    if (q) {
-      list = list.filter((s) => (String(s.customer || "") + " " + String(s.summaryName || "") + " " + String(s.date || "")).toLowerCase().includes(q));
-    }
-    const shown = list.slice(0, 40);
-    if (shown.length === 0) return '<tr><td colspan="4" style="text-align:center;">ምንም ሽያጭ አልተገኘም</td></tr>';
-    const rows = shown.map((s) => `<tr>
-      <td><small>${escapeHTML(s.date)}</small></td>
-      <td><b>${escapeHTML(s.customer)}</b><br><small>${escapeHTML(s.summaryName)}</small>${statusTag(s)}</td>
-      <td><b>${fmt(s.total)}</b></td>
-      <td><button class="btn-primary" style="padding:6px 10px;font-size:12px;width:auto;" onclick="SBM.returns.openSale(${Number(s.id)})">↩️ ምረጥ</button></td></tr>`).join("");
-    const more = list.length > shown.length
-      ? `<tr><td colspan="4" style="text-align:center;font-size:12px;color:var(--secondary);">ሌላ ${list.length - shown.length} ሽያጭ አለ — በመፈለጊያ ይፈልጉ</td></tr>` : "";
-    return rows + more;
-  }
-
-  function renderUI() {
-    return `<input type="text" id="retSearch" class="search-bar" placeholder="🔍 የደንበኛ ስም / ዕቃ / ቀን መፈለጊያ..." onkeyup="SBM.returns.filter(this.value)">
-      <p style="font-size:12px;color:var(--secondary);margin-bottom:8px;">ተመላሽ የሚደረግበትን ሽያጭ ይምረጡ። ከፊል ተመላሽ ወይም ሙሉ ሽያጭ መሰረዝ ይችላሉ።</p>
-      <div style="max-height:300px;overflow-y:auto;"><table>
-        <thead><tr><th>ቀን</th><th>ደንበኛ / ዕቃ</th><th>ጠቅላላ</th><th></th></tr></thead>
-        <tbody id="retSalesBody">${salesRows("")}</tbody></table></div>
-      <button class="btn-secondary" style="margin-top:10px;width:100%;padding:10px;" onclick="SBM.returns.showHistory()">📜 የተመላሽ ታሪክ</button>`;
-  }
-
-  function filter(q) {
-    const b = el("retSalesBody");
-    if (b) b.innerHTML = salesRows(q);
-  }
-
-  // ---------- የአንድ ሽያጭ ተመላሽ ማስገቢያ ገጽ ----------
-
-  function openSale(id) {
-    if (!SBM.auth.getSession()) return;
-    const sale = findSale(id);
-    if (!sale) return alert("ሽያጩ አልተገኘም!");
-    const lines = saleLines(sale);
-    const parts = SBM.report.saleParts(sale);
-    const anyLeft = lines.some((l) => l.remaining > EPS);
-
-    const rows = lines.map((l) => {
-      const remDisp = round3(l.remaining / l.conv);
-      const retDisp = round3(l.returned / l.conv);
-      const input = l.remaining > EPS
-        ? `<input type="number" id="retQty_${l.idx}" min="0" max="${remDisp}" step="0.01" placeholder="0" style="width:80px;padding:6px;" oninput="SBM.returns.updatePreview(${Number(sale.id)})">`
-        : '<small style="color:var(--secondary);">ተመልሷል</small>';
-      return `<tr><td><b>${escapeHTML(l.name)}</b><br><small>${fmt(l.sellPrice * l.conv)} ETB / ${escapeHTML(l.displayUnit)}</small></td>
-        <td>${l.soldDisplay} ${escapeHTML(l.displayUnit)}${retDisp > 0 ? `<br><small style="color:orange;">ተመልሷል፦ ${retDisp}</small>` : ""}</td>
-        <td>${remDisp}</td><td>${input}</td></tr>`;
-    }).join("");
-
-    const payLines = [];
-    if (parts.cash > 0.004) payLines.push("💵 ካሽ " + fmt(parts.cash));
-    if (parts.bank > 0.004) payLines.push("🏦 ባንክ " + fmt(parts.bank));
-    if (parts.credit > 0.004) payLines.push("💳 ዱቤ " + fmt(parts.credit));
-
-    document.getElementById("modalTitle").innerText = "↩️ ተመላሽ / ሽያጭ ስረዛ";
-    document.getElementById("modalBody").innerHTML = `
-      <div class="summary-box"><h4>👤 ${escapeHTML(sale.customer)} — ${escapeHTML(sale.date)}</h4>
-        <p style="font-size:13px;margin-top:4px;">ጠቅላላ፦ <b>${fmt(sale.total)} ETB</b>${payLines.length ? "<br><small>" + payLines.join(" · ") + "</small>" : ""}</p>
-        ${statusTag(sale).replace("<br>", "")}</div>
-      ${anyLeft ? `
-      <p style="font-size:12px;color:var(--secondary);margin-bottom:6px;">ለሚመለሱት ዕቃዎች ብዛት ያስገቡ (በተሸጡበት አሃድ)፦</p>
-      <div style="overflow-x:auto;"><table><thead><tr><th>ዕቃ</th><th>የተሸጠ</th><th>ቀሪ</th><th>ተመላሽ</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <button class="btn-secondary" style="margin:8px 0;padding:8px;width:100%;" onclick="SBM.returns.fillAll(${Number(sale.id)})">ሁሉንም ቀሪ ሙላ</button>
-      <div class="form-group"><label>የተመላሹ ምክንያት</label>
-        <select id="retReason"><option>ደንበኛው መልሷል</option><option>ዕቃው ጉድለት ነበረው</option><option>የተሳሳተ ዕቃ/ዋጋ ተሸጧል</option><option>ሌላ</option></select></div>
-      <div class="form-group"><label>ተጨማሪ ማስታወሻ (አማራጭ)</label><input type="text" id="retNote"></div>
-      <div class="form-group"><label>ዕቃው ወደ ስቶክ ይመለስ?</label>
-        <select id="retRestock" onchange="SBM.returns.updatePreview(${Number(sale.id)})"><option value="1">✅ አዎ፣ ጤናማ ነው — ወደ ስቶክ ይመለስ</option><option value="0">🚫 አይ፣ የተበላሸ/ጉድለት ነው — ወደ ስቶክ አይመለስ</option></select></div>
-      <div class="form-group"><label>ገንዘብ የሚመለስበት መንገድ</label>
-        <select id="retMethod" onchange="SBM.returns.updatePreview(${Number(sale.id)})"><option value="cash">💵 በካሽ</option><option value="bank">🏦 በባንክ</option></select></div>
-      <div class="form-group hidden" id="retRefGroup"><label>🏦 የባንክ ማጣቀሻ ቁጥር (አማራጭ)</label><input type="text" id="retRef"></div>
-      <div id="retPreview" style="background:rgba(0,0,0,.03);padding:10px;border-radius:8px;margin:10px 0;font-size:13px;"></div>
-      <button class="btn-primary" style="padding:12px;font-weight:bold;" onclick="SBM.returns.submit(${Number(sale.id)},'return')">✔ ተመላሽ መዝግብ</button>
-      <button class="btn-danger" style="margin-top:8px;width:100%;padding:10px;" onclick="SBM.returns.submit(${Number(sale.id)},'void')">🗑️ ሙሉውን ቀሪ ሽያጭ ሰርዝ</button>`
-      : '<p style="text-align:center;margin:15px 0;">ይህ ሽያጭ ሙሉ በሙሉ ተመልሷል/ተሰርዟል።</p>'}
-      <button class="btn-secondary" style="margin-top:8px;width:100%;padding:10px;" onclick="SBM.app.openPage('returns')">⬅ ተመለስ</button>`;
-    if (anyLeft) updatePreview(sale.id);
-  }
-
-  function fillAll(saleId) {
-    const sale = findSale(saleId);
-    if (!sale) return;
-    saleLines(sale).forEach((l) => {
-      const inp = el("retQty_" + l.idx);
-      if (inp) inp.value = round3(l.remaining / l.conv);
-    });
-    updatePreview(saleId);
-  }
-
-  function updatePreview(saleId) {
-    const box = el("retPreview");
-    const sale = findSale(saleId);
-    if (!box || !sale) return;
-    const refGroup = el("retRefGroup");
-    if (refGroup) refGroup.classList.toggle("hidden", readMethod() !== "bank");
-    const c = collectPicks(sale, "return", false);
-    if (!c.picks.length) {
-      box.innerHTML = '<span style="color:var(--secondary);">ተመላሽ ብዛት ሲያስገቡ ሂሳቡ እዚህ ይታያል።</span>';
-      return;
-    }
-    const calc = calcReturn(sale, c.picks, readRestock());
-    const methodLabel = readMethod() === "bank" ? "🏦 በባንክ" : "💵 በካሽ";
-    box.innerHTML = `
-      <div style="display:flex;justify-content:space-between;"><span>ተመላሽ ዋጋ (ያለ ቫት)</span><b>${fmt(calc.subtotal)}</b></div>
-      ${calc.vat > 0 ? `<div style="display:flex;justify-content:space-between;"><span>ቫት 15%</span><b>${fmt(calc.vat)}</b></div>` : ""}
-      <div style="display:flex;justify-content:space-between;font-size:15px;margin-top:4px;"><span><b>ጠቅላላ ተመላሽ</b></span><b style="color:#dc3545;">${fmt(calc.total)} ETB</b></div>
-      ${calc.creditReduced > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:4px;"><span>💳 ከደንበኛው ዕዳ የሚቀነስ</span><b>${fmt(calc.creditReduced)}</b></div>` : ""}
-      <div style="display:flex;justify-content:space-between;margin-top:4px;"><span>${methodLabel} ለደንበኛ የሚመለስ ገንዘብ</span><b>${fmt(calc.cashBack)}</b></div>`;
-  }
-
-  // ---------- መመዝገብ ----------
-
-  function submit(saleId, mode) {
-    if (!SBM.auth.getSession()) return;
-    const sale = findSale(saleId);
-    if (!sale) return alert("ሽያጩ አልተገኘም!");
-    mode = mode === "void" ? "void" : "return";
-
-    const c = collectPicks(sale, mode, true);
-    if (c.error) return alert(c.error);
-    if (!c.picks.length) return alert("ቢያንስ ለአንድ ዕቃ ተመላሽ ብዛት ያስገቡ!");
-
-    const restock = readRestock();
-    const method = readMethod();
-    const calc = calcReturn(sale, c.picks, restock);
-    if (calc.total <= 0) return alert("የተመላሹ ዋጋ 0 ነው — ብዛት እና ዋጋ ያረጋግጡ!");
-
-    const reasonSel = el("retReason");
-    const noteEl = el("retNote");
-    const reason = (mode === "void" ? "ሽያጭ ተሰርዟል" : (reasonSel ? reasonSel.value : "")) + (noteEl && noteEl.value.trim() ? " — " + noteEl.value.trim() : "");
-
-    const msg = (mode === "void" ? "🗑️ ቀሪው ሽያጭ ሙሉ በሙሉ ይሰረዝ?\n\n" : "↩️ ተመላሹ ይመዝገብ?\n\n")
-      + describeLines(calc.lines) + "\n\n"
-      + "ጠቅላላ ተመላሽ፦ " + fmt(calc.total) + " ETB\n"
-      + (calc.creditReduced > 0 ? "ከዱቤ ዕዳ የሚቀነስ፦ " + fmt(calc.creditReduced) + " ETB\n" : "")
-      + (calc.cashBack > 0 ? "ለደንበኛ የሚመለስ (" + (method === "bank" ? "ባንክ" : "ካሽ") + ")፦ " + fmt(calc.cashBack) + " ETB\n" : "")
-      + (restock ? "ዕቃው ወደ ስቶክ ይመለሳል።" : "ዕቃው ወደ ስቶክ አይመለስም።");
-    if (!confirm(msg)) return;
-
-    // 1) ወደ ስቶክ መመለስ
-    const missing = [];
-    if (restock) {
-      c.picks.forEach((p) => {
-        const si = (DB.stock || []).find((s) => s.id === p.line.itemId);
-        if (!si) { missing.push(p.line.name); return; }
-        if (!Array.isArray(si.batches) || si.batches.length === 0) {
-          si.batches = (si.qty || 0) > 0 ? [{ qty: si.qty, buyPrice: si.buyPrice || 0 }] : [];
-        }
-        // የተመለሰው ዕቃ የመግዣ ዋጋ = የመሸጫ ዋጋ − በዚያ ሽያጭ የተገኘ የአንዱ ትርፍ
-        const cost = Math.max(0, p.line.sellPrice - p.line.unitProfit);
-        si.batches.push({ qty: p.qty, buyPrice: cost });
-        si.qty = (si.qty || 0) + p.qty;
-      });
-      SBM.database.save("stock");
-    }
-
-    // 2) ከዱቤ ዕዳ መቀነስ
-    if (calc.creditReduced > 0) {
-      const label = mode === "void" ? "ሽያጭ ተሰረዘ (ዕዳ ቀነሰ)" : "ዕቃ መለሰ (ዕዳ ቀነሰ)";
-      SBM.credit.recordTransaction(sale.customer, label, describeLines(calc.lines), 0, calc.creditReduced, "");
-      const rec = (DB.credits || []).find((x) => String(x.customer).toLowerCase() === String(sale.customer).toLowerCase());
-      if (rec && Number(rec.amount || 0) <= 0.005) {
-        DB.credits = DB.credits.filter((x) => x !== rec);
-        SBM.database.save("credits");
-      }
-    }
-
-    // 3) የተመላሽ መዝገብ
-    let newId = Date.now();
-    const used = new Set(allReturns().map((r) => r.id));
-    while (used.has(newId)) newId += 1;
-    const refEl = el("retRef");
-    const entry = {
-      id: newId, saleId: sale.id, type: mode, date: getEthDateStr(), by: SBM.auth.currentName(),
-      customer: sale.customer || "", reason, restocked: restock,
-      lines: calc.lines, subtotal: calc.subtotal, vat: calc.vat, total: calc.total, profitReversed: calc.profit,
-      refundCash: method === "cash" ? calc.cashBack : 0,
-      refundBank: method === "bank" ? calc.cashBack : 0,
-      refundRef: method === "bank" && refEl ? refEl.value.trim() : "",
-      creditReduced: calc.creditReduced,
-    };
-    allReturns().push(entry);
-    SBM.database.save("returns");
-
-    showToast(mode === "void" ? "ሽያጩ ተሰርዟል!" : "ተመላሹ ተመዝግቧል!");
-    if (missing.length) setTimeout(() => alert("⚠️ ይህ ዕቃ ከስቶክ ዝርዝር ተሰርዞ ስለነበር ወደ ስቶክ አልተመለሰም፦\n" + missing.join(", ")), 300);
-    showReceipt(entry.id);
-  }
-
-  // ---------- የተመላሽ ደረሰኝ እና ታሪክ ----------
-
-  function showReceipt(id) {
-    const r = allReturns().find((x) => String(x.id) === String(id));
-    if (!r) return;
-    const items = (r.lines || []).map((l) => `<p>${escapeHTML(l.name)} — ${l.displayQty} ${escapeHTML(l.displayUnit || "")} = ${fmt(l.value)}</p>`).join("");
-    const payLines = [];
-    if (Number(r.creditReduced) > 0.004) payLines.push("💳 ከዱቤ ዕዳ ተቀነሰ፦ " + fmt(r.creditReduced));
-    if (Number(r.refundCash) > 0.004) payLines.push("💵 በካሽ ተመለሰ፦ " + fmt(r.refundCash));
-    if (Number(r.refundBank) > 0.004) payLines.push("🏦 በባንክ ተመለሰ፦ " + fmt(r.refundBank) + (r.refundRef ? " (" + escapeHTML(r.refundRef) + ")" : ""));
-    document.getElementById("modalTitle").innerText = r.type === "void" ? "🧾 የሽያጭ ስረዛ ደረሰኝ" : "🧾 የተመላሽ ደረሰኝ";
-    document.getElementById("modalBody").innerHTML = `<div style="border:1px dashed var(--border);padding:15px;text-align:center;font-family:monospace;">
-      <h3>${escapeHTML(DB.companyName)}</h3><p><b>${r.type === "void" ? "የሽያጭ ስረዛ ደረሰኝ" : "የተመላሽ ዕቃ ደረሰኝ"}</b></p>
-      <p>ደንበኛ: <b>${escapeHTML(r.customer)}</b></p><p>ቀን: ${escapeHTML(r.date)}</p>
-      <hr style="border-top:1px dashed #ccc;margin:10px 0;">
-      <div style="text-align:left;font-size:13px;"><p><b>የተመለሱ ዕቃዎች፦</b></p>${items}</div>
-      <hr style="border-top:1px dashed #ccc;margin:10px 0;">
-      <div style="text-align:right;font-size:13px;line-height:1.6;">
-        ${Number(r.vat) > 0 ? `<p>ንኡስ ድምር: <b>${fmt(r.subtotal)} ETB</b></p><p>ቫት 15%: <b>${fmt(r.vat)} ETB</b></p>` : ""}
-        <p style="font-size:15px;color:#dc3545;"><b>ጠቅላላ ተመላሽ: ${fmt(r.total)} ETB</b></p>
-        ${payLines.map((p) => `<p style="font-size:12px;">${p}</p>`).join("")}
-        ${r.reason ? `<p style="font-size:12px;">ምክንያት፦ ${escapeHTML(r.reason)}</p>` : ""}
-        ${r.by ? `<p style="font-size:12px;">ያስመዘገበው፦ ${escapeHTML(r.by)}</p>` : ""}
-      </div></div>
-      <div style="display:flex;gap:10px;margin-top:12px;">
-        <button class="btn-secondary" style="flex:1;padding:10px;" onclick="SBM.app.openPage('returns')">⬅ ተመለስ</button>
-        <button class="btn-primary" style="flex:1;padding:10px;" onclick="SBM.app.printModalContent()">🖨️ ፕሪንት</button>
-      </div>`;
-  }
-
-  function showHistory() {
-    if (!SBM.auth.getSession()) return;
-    const list = allReturns().slice().reverse();
-    const rows = list.length === 0
-      ? '<tr><td colspan="4" style="text-align:center;">ምንም የተመዘገበ ተመላሽ የለም</td></tr>'
-      : list.map((r) => `<tr onclick="SBM.returns.showReceipt(${Number(r.id)})" style="cursor:pointer;">
-          <td><small>${escapeHTML(r.date)}</small></td>
-          <td><b>${escapeHTML(r.customer)}</b><br><small>${escapeHTML(describeLines(r.lines || []))}</small>${r.by ? "<br><small>👤 " + escapeHTML(r.by) + "</small>" : ""}</td>
-          <td>${r.type === "void" ? '<span style="color:#dc3545;font-weight:bold;">❌ ስረዛ</span>' : '<span style="color:orange;font-weight:bold;">↩️ ተመላሽ</span>'}</td>
-          <td><b>${fmt(r.total)}</b></td></tr>`).join("");
-    document.getElementById("modalTitle").innerText = "📜 የተመላሽ ታሪክ";
-    document.getElementById("modalBody").innerHTML = `
-      <p style="font-size:12px;color:var(--secondary);margin-bottom:6px;">ደረሰኝ ለማየት ረድፉን ይንኩ።</p>
-      <div style="max-height:320px;overflow-y:auto;"><table><thead><tr><th>ቀን</th><th>ደንበኛ / ዕቃ</th><th>ዓይነት</th><th>ጠቅላላ</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <button class="btn-secondary" style="margin-top:10px;width:100%;padding:10px;" onclick="SBM.app.openPage('returns')">⬅ ተመለስ</button>`;
-  }
-
-  global.SBM = global.SBM || {};
-  global.SBM.returns = { renderUI, filter, openSale, fillAll, updatePreview, submit, showReceipt, showHistory, saleStatus, allReturns };
 })(window);
 
 // ==== receipt.js ====
@@ -3580,9 +3406,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const pp = (SBM.report && SBM.report.saleParts) ? SBM.report.saleParts(last) : { cash: tot, bank: 0, credit: 0 };
     const payLines = [];
     if (pp.cash > 0.004) payLines.push("💵 ካሽ " + pp.cash.toFixed(2));
-    if (pp.bank > 0.004) payLines.push("🏦 ባንክ " + pp.bank.toFixed(2) + (last.bankRef ? " (" + escapeHTML(last.bankRef) + ")" : ""));
+    if (pp.bank > 0.004) payLines.push("🏦 ባንክ " + pp.bank.toFixed(2) + ((last.bankName || last.bankRef) ? " (" + escapeHTML([last.bankName, last.bankRef].filter(Boolean).join(" · ")) + ")" : ""));
     if (pp.credit > 0.004) payLines.push("💳 ዱቤ " + pp.credit.toFixed(2));
-    const rs = (SBM.returns && SBM.returns.saleStatus) ? SBM.returns.saleStatus(last) : null;
     return `<div style="border:1px dashed var(--border);padding:15px;text-align:center;font-family:monospace;">
       <h3>${escapeHTML(DB.companyName)}</h3><p><b>የእቃዎች መሸጫ ደረሰኝ${vatApplied ? " (VAT Invoice)" : ""}</b></p>
       <p>ደንበኛ: <b>${escapeHTML(last.customer)}</b></p><p>ቀን: ${escapeHTML(last.date)}</p>
@@ -3593,7 +3418,6 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         ${vatApplied ? `<p>ንኡስ ድምር: <b>${sub.toFixed(2)} ETB</b></p><p>ቫት 15%: <b>${vat.toFixed(2)} ETB</b></p>` : ""}
         <p style="font-size:15px;color:#0A5EB0;"><b>ጠቅላላ ክፍያ: ${tot.toFixed(2)} ETB</b></p>
         ${payLines.length ? `<p style="font-size:12px;">ክፍያ፦ ${payLines.join(" · ")} ETB</p>` : ""}
-        ${rs && rs.total > 0 ? `<p style="font-size:12px;color:#dc3545;">↩️ ከዚህ ሽያጭ ተመላሽ፦ ${rs.total.toFixed(2)} ETB${rs.status === "full" ? " (ሙሉ በሙሉ ተሰርዟል)" : ""}</p>` : ""}
         ${last.seller ? `<p style="font-size:12px;">ሻጭ፦ ${escapeHTML(last.seller)}</p>` : ""}
       </div><br><button class="btn-primary" onclick="SBM.app.printModalContent()">🖨️ ፕሪንት አድርግ</button></div>`;
   }
