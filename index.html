@@ -590,6 +590,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       renderDashboardMenu();
       p.value = "";
       showToast("እንኳን ደህና መጡ " + result.name + "!");
+      if (SBM.auth.isAdmin() && SBM.backup && SBM.backup.cloudStatusInfo && !SBM.backup.cloudStatusInfo().ok) {
+        setTimeout(() => showToast(SBM.backup.cloudStatusInfo().text), 12000);
+      }
       if (SBM.auth.isAdmin() && SBM.backup && SBM.backup.backupAgeDays() > 7) {
         setTimeout(() => showToast("💾 ባካፕ ከ7 ቀን በላይ ሆኗል — «ባካፕ & ማጽጃ» ውስጥ ይላኩ"), 9500);
       }
@@ -1874,7 +1877,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
           <option value="carton">ካርቶን</option>
           <option value="dozen">ደርዘን</option>
           <option value="crate">ካሳ</option>
-          <option value="piece">ፍሬ (ነጠላ)</option>
+          <option value="liter">ጀሪካን/በርሜል (ሊትር)</option>
+          <option value="meter">ጥቅል/ዕጣ (ሜትር)</option>
+          <option value="piece">ሌላ/ነጠላ (ፍሬ፣ ኪሎ፣ ሊትር፣ ሜትር)</option>
         </select>
       </div>
 
@@ -1902,8 +1907,22 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <div class="form-group"><label>የአንዱ ካሳ ዋጋ (ETB)</label><input type="number" id="stkCratePrice" placeholder="ዋጋ ያስገቡ"></div>
       </div>
 
+      <div id="stkLiterFields" class="hidden">
+        <div class="form-group"><label>የዕቃው መያዣ ስም</label><input type="text" id="stkLiterName" value="ጀሪካን" placeholder="ጀሪካን / በርሜል"></div>
+        <div class="form-group"><label>አንዱ ስንት ሊትር ይይዛል?</label><input type="number" id="stkLiterPer" placeholder="ለምሳሌ 20"></div>
+        <div class="form-group"><label>ስንት ገዙ?</label><input type="number" id="stkLiterCount" placeholder="ብዛት ያስገቡ"></div>
+        <div class="form-group"><label>የአንዱ ዋጋ (ETB)</label><input type="number" id="stkLiterPrice" placeholder="ዋጋ ያስገቡ"></div>
+      </div>
+
+      <div id="stkMeterFields" class="hidden">
+        <div class="form-group"><label>የዕቃው መያዣ ስም</label><input type="text" id="stkMeterName" value="ጥቅል" placeholder="ጥቅል / ዕጣ"></div>
+        <div class="form-group"><label>አንዱ ስንት ሜትር ይይዛል?</label><input type="number" id="stkMeterPer" placeholder="ለምሳሌ 50"></div>
+        <div class="form-group"><label>ስንት ገዙ?</label><input type="number" id="stkMeterCount" placeholder="ብዛት ያስገቡ"></div>
+        <div class="form-group"><label>የአንዱ ዋጋ (ETB)</label><input type="number" id="stkMeterPrice" placeholder="ዋጋ ያስገቡ"></div>
+      </div>
+
       <div id="stkPieceFields" class="hidden">
-        <div class="form-group"><label>የመሸጫ አሃድ</label><input type="text" id="stkPieceUnit" value="ፍሬ" placeholder="ፍሬ"></div>
+        <div class="form-group"><label>የመሸጫ አሃድ (ፍሬ፣ ኪሎ፣ ሊትር፣ ሜትር…)</label><input type="text" id="stkPieceUnit" list="stkUnitList" value="ፍሬ" placeholder="ፍሬ"><datalist id="stkUnitList"><option value="ፍሬ"><option value="ኪሎ"><option value="ሊትር"><option value="ሜትር"></datalist></div>
         <div style="display:flex;gap:10px;">
           <div class="form-group" style="flex:1"><label>ብዛት</label><input type="number" id="stkPieceQty"></div>
           <div class="form-group" style="flex:1"><label>የአንዱ መግዣ ዋጋ (ETB)</label><input type="number" id="stkPiecePrice"></div>
@@ -1923,6 +1942,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     document.getElementById("stkCartonFields").classList.toggle("hidden", type !== "carton");
     document.getElementById("stkDozenFields").classList.toggle("hidden", type !== "dozen");
     document.getElementById("stkCrateFields").classList.toggle("hidden", type !== "crate");
+    document.getElementById("stkLiterFields").classList.toggle("hidden", type !== "liter");
+    document.getElementById("stkMeterFields").classList.toggle("hidden", type !== "meter");
     document.getElementById("stkPieceFields").classList.toggle("hidden", type !== "piece");
   }
 
@@ -2110,6 +2131,19 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       const totalSmall = count * pieces;
       const unitPrice = (count * price) / totalSmall;
       saveItem(name, "ፍሬ", "ካሳ", pieces, totalSmall, unitPrice);
+
+    } else if (type === "liter" || type === "meter") {
+      const pre = type === "liter" ? "stkLiter" : "stkMeter";
+      const base = type === "liter" ? "ሊትር" : "ሜትር";
+      const cont = (document.getElementById(pre + "Name").value || "").trim() || (type === "liter" ? "ጀሪካን" : "ጥቅል");
+      const per = parseFloat(document.getElementById(pre + "Per").value) || 0;
+      const count = parseFloat(document.getElementById(pre + "Count").value) || 0;
+      const price = parseFloat(document.getElementById(pre + "Price").value) || 0;
+      if (per <= 0) return alert("አንዱ ስንት " + base + " እንደሚይዝ ያስገቡ!");
+      if (count <= 0 || price <= 0) return alert("እባክዎን ትክክለኛ ብዛት እና ዋጋ ያስገቡ!");
+      const totalSmall = count * per;
+      const unitPrice = (count * price) / totalSmall;
+      saveItem(name, base, cont, per, totalSmall, unitPrice);
 
     } else {
       const unit = (document.getElementById("stkPieceUnit").value || "").trim() || "ፍሬ";
@@ -3323,75 +3357,136 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       return alert("ይህ ሽያጭ ከ" + RETURN_DAYS_LIMIT + " ቀን በላይ ሆኖታል። ተመላሽ ማስተካከል የሚችለው አድሚን ብቻ ነው።");
     }
     const items = sale.items || [];
-    let idxs;
-    if (items.length <= 1) {
-      if (!confirm("ይህ ሽያጭ ሙሉ በሙሉ ይመለስ? (እቃው ወደ ስቶክ ይመለሳል፣ ሽያጩ ይሰረዛል)")) return;
-      idxs = items.map((_, i) => i);
-    } else {
+    if (items.length === 0) return;
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const EPS = 1e-6;
+
+    // ---- የትኛው እቃ? ----
+    let lineIdxs;
+    if (items.length === 1) lineIdxs = [0];
+    else {
       const list = items.map((c, i) => (i + 1) + ". " + c.name + " (" + c.displayQty + " " + (c.displayUnit || "") + ")").join("\n");
-      const ans = prompt("የትኛው እቃ ተመለሰ? ቁጥሩን ያስገቡ (ሁሉንም ለመመለስ 0 ያስገቡ)፡\n\n" + list, "0");
+      const ans = prompt("የትኛው እቃ ተመለሰ? ቁጥሩን ያስገቡ (ሁሉንም ሽያጭ ለመመለስ 0)፡\n\n" + list, "1");
       if (ans === null) return;
       const n = parseInt(ans, 10);
       if (isNaN(n) || n < 0 || n > items.length) return alert("ትክክለኛ ቁጥር ያስገቡ!");
-      idxs = n === 0 ? items.map((_, i) => i) : [n - 1];
+      lineIdxs = n === 0 ? items.map((_, i) => i) : [n - 1];
     }
-    if (idxs.length === 0) return;
 
+    // ---- ምን ያህል? (በማንኛውም አሃድ፦ ኩንታል/ኪሎ፣ ካርቶን/ፍሬ፣ ደርዘን/ፍሬ፣ ካሳ/ፍሬ፣ ጥቅል/ሜትር፣ ጀሪካን/ሊትር) ----
+    const plan = [];
+    for (const idx of lineIdxs) {
+      const c = items[idx];
+      const si = (DB.stock || []).find((x) => x.id === c.id);
+      const small = (si && si.unit) || "ፍሬ";
+      const bulk = si && si.bulkUnit && (Number(si.bulkConversion) || 1) > 1 ? si.bulkUnit : null;
+      const conv = bulk ? Number(si.bulkConversion) : 1;
+      if (lineIdxs.length > 1 && lineIdxs.length === items.length) {
+        plan.push({ idx, rq: Number(c.qty), shown: c.displayQty, unitLabel: c.displayUnit || small }); // ሁሉንም ሽያጭ መመለስ
+        continue;
+      }
+      let useBulk = false;
+      if (bulk) {
+        const soldBulk = (c.displayUnit || "") === bulk;
+        const u = prompt("በየትኛው አሃድ ይመልሳሉ?\n1 = " + bulk + "\n2 = " + small, soldBulk ? "1" : "2");
+        if (u === null) return;
+        if (u.trim() !== "1" && u.trim() !== "2") return alert("1 ወይም 2 ያስገቡ!");
+        useBulk = u.trim() === "1";
+      }
+      const unitLabel = useBulk ? bulk : small;
+      const factor = useBulk ? conv : 1;
+      const fullInUnit = r2(Number(c.qty) / factor);
+      const qStr = prompt("ስንት " + unitLabel + " ተመለሰ?\n(" + c.name + "፦ ከተሸጠው " + c.displayQty + " " + (c.displayUnit || "") + " ውስጥ፤ ጠቅላላው በ" + unitLabel + " = " + fullInUnit + ")", String(fullInUnit));
+      if (qStr === null) return;
+      const q = parseFloat(qStr);
+      if (isNaN(q) || q <= 0) return alert("ትክክለኛ ብዛት ያስገቡ!");
+      const rq = q * factor;
+      if (rq > Number(c.qty) + EPS) return alert("ከተሸጠው በላይ መመለስ አይቻልም! (ከፍተኛ፦ " + fullInUnit + " " + unitLabel + ")");
+      plan.push({ idx, rq: Math.min(rq, Number(c.qty)), shown: q, unitLabel });
+    }
+    if (plan.length === 0) return;
+
+    // ---- ስሌት ----
     const vatRate = sale.vatApplied === false ? 0 : (Number(sale.subtotal) > 0 ? Number(sale.vatAmount || 0) / Number(sale.subtotal) : 0);
-    const retLines = idxs.map((i) => items[i]);
-    const retSub = retLines.reduce((a, c) => a + Number(c.subtotal || 0), 0);
+    plan.forEach((pl) => {
+      const c = items[pl.idx];
+      pl.r = Math.min(1, pl.rq / Number(c.qty));
+      pl.full = pl.r >= 1 - EPS;
+      pl.sub = Number(c.subtotal || 0) * pl.r;
+      pl.prof = Number(c.profit || 0) * pl.r;
+      pl.buy = Number(c.qty) > 0 ? Math.max(0, (Number(c.sellPrice) * Number(c.qty) - Number(c.profit || 0)) / Number(c.qty)) : 0;
+    });
+    const retSub = plan.reduce((a, p) => a + p.sub, 0);
     const retVat = retSub * vatRate;
     const retTotal = retSub + retVat;
-    const retProfit = retLines.reduce((a, c) => a + Number(c.profit || 0), 0);
+    const retProfit = plan.reduce((a, p) => a + p.prof, 0);
     const oldTotal = Number(sale.total || 0);
-    const ratio = idxs.length === items.length || oldTotal <= 0 ? 1 : Math.min(1, retTotal / oldTotal);
+    const wholeSale = plan.length === items.length && plan.every((p) => p.full);
+    const ratio = wholeSale || oldTotal <= 0 ? 1 : Math.min(1, retTotal / oldTotal);
 
-    // 1) እቃውን ወደ ስቶክ መመለስ
-    retLines.forEach((c) => {
+    // 1) እቃውን ወደ ስቶክ መመለስ (በትንሹ አሃድ)
+    plan.forEach((pl) => {
+      const c = items[pl.idx];
       const si = (DB.stock || []).find((x) => x.id === c.id);
       if (!si) return;
-      const q = Number(c.qty) || 0;
-      const buy = q > 0 ? Math.max(0, (Number(c.sellPrice) * q - Number(c.profit || 0)) / q) : 0;
-      si.qty = (Number(si.qty) || 0) + q;
+      si.qty = (Number(si.qty) || 0) + pl.rq;
       if (!si.batches) si.batches = [];
-      si.batches.unshift({ qty: q, buyPrice: buy });
+      si.batches.unshift({ qty: pl.rq, buyPrice: pl.buy });
     });
 
     // 2) ዱቤ ካለ ከደንበኛው ዕዳ መቀነስ
     const credit = Number(sale.creditAmount || 0);
     const creditCut = Math.round(credit * ratio * 100) / 100;
+    const desc = plan.map((p) => items[p.idx].name + " (x" + p.shown + " " + p.unitLabel + ")").join(", ");
     if (creditCut > 0 && sale.customer && SBM.credit) {
-      SBM.credit.recordTransaction(sale.customer, "እቃ መለሰ", retLines.map((c) => c.name).join(", "), -creditCut, 0, "");
+      SBM.credit.recordTransaction(sale.customer, "እቃ መለሰ", desc, -creditCut, 0, "");
     }
 
     // 3) ሽያጩን ማስተካከል ወይም መሰረዝ
-    if (ratio >= 1) {
+    if (wholeSale) {
       DB.sales = DB.sales.filter((x) => Number(x.id) !== Number(id));
     } else {
-      sale.items = items.filter((_, i) => !idxs.includes(i));
-      sale.subtotal = Math.round((Number(sale.subtotal) - retSub) * 100) / 100;
-      sale.vatAmount = Math.round((Number(sale.vatAmount || 0) - retVat) * 100) / 100;
-      sale.total = Math.round((oldTotal - retTotal) * 100) / 100;
-      sale.profit = Math.round((Number(sale.profit || 0) - retProfit) * 100) / 100;
-      sale.cashAmount = Math.round(Number(sale.cashAmount || 0) * (1 - ratio) * 100) / 100;
-      sale.bankAmount = Math.round(Number(sale.bankAmount || 0) * (1 - ratio) * 100) / 100;
-      sale.creditAmount = Math.round((credit - creditCut) * 100) / 100;
+      plan.forEach((pl) => {
+        const c = items[pl.idx];
+        if (pl.full) return;
+        const newQty = Number(c.qty) - pl.rq;
+        const small = ((DB.stock || []).find((x) => x.id === c.id) || {}).unit || "ፍሬ";
+        const cf = Number(c.convFactor) || 1;
+        c.subtotal = r2(Number(c.subtotal) - pl.sub);
+        c.profit = r2(Number(c.profit || 0) - pl.prof);
+        c.qty = newQty;
+        const inSold = newQty / cf;
+        if (cf > 1 && Math.abs(inSold - Math.round(inSold)) > 1e-6) {
+          // ከጅምላ አሃድ ሙሉ ቁጥር ካልወጣ (ምሳሌ፦ 9 ፍሬ ከደርዘን) በትንሹ አሃድ ያሳያል
+          c.displayUnit = small; c.displayQty = r2(newQty); c.displaySellPrice = c.sellPrice; c.convFactor = 1;
+        } else {
+          c.displayQty = r2(inSold);
+        }
+      });
+      sale.items = items.filter((_, i) => !plan.some((p) => p.idx === i && p.full));
+      sale.subtotal = r2(Number(sale.subtotal) - retSub);
+      sale.vatAmount = r2(Number(sale.vatAmount || 0) - retVat);
+      sale.total = r2(oldTotal - retTotal);
+      sale.profit = r2(Number(sale.profit || 0) - retProfit);
+      sale.cashAmount = r2(Number(sale.cashAmount || 0) * (1 - ratio));
+      sale.bankAmount = r2(Number(sale.bankAmount || 0) * (1 - ratio));
+      sale.creditAmount = r2(credit - creditCut);
       sale.summaryName = sale.items.map((c) => c.name + " (x" + c.displayQty + (c.displayUnit || "") + " @ " + c.displaySellPrice + "ብር)").join(", ");
     }
     if (!Array.isArray(DB.returns)) DB.returns = [];
     DB.returns.push({
       id: Date.now(), date: getEthDateStr(), saleId: sale.id, saleDate: sale.date, customer: sale.customer || "",
-      items: retLines.map((c) => c.name + " (x" + c.displayQty + (c.displayUnit || "") + ")").join(", "),
-      amount: Math.round(retTotal * 100) / 100, creditReduced: creditCut, full: ratio >= 1,
+      items: desc, amount: r2(retTotal), creditReduced: creditCut, full: wholeSale,
       by: SBM.auth.currentName(), role: SBM.auth.isAdmin() ? "admin" : "staff",
     });
-    SBM.app.addAlert("return", "የተመለሰ እቃ መዘገበ፦ " + retLines.map((c) => c.name).join(", ") + " — ደንበኛ፡ " + (sale.customer || ""), retTotal);
+    SBM.app.addAlert("return", "የተመለሰ እቃ መዘገበ፦ " + desc + " — ደንበኛ፡ " + (sale.customer || ""), retTotal);
     SBM.database.save("returns");
     SBM.database.save("stock");
     SBM.database.save("sales");
     showToast("እቃው ተመልሷል፤ ስቶክ ተስተካክሏል ✅");
     SBM.app.openPage("salesHistory");
   }
+
   function filterSalesHistory(mode) {
     const sales = DB.sales || [];
     const b = document.getElementById("salesHistoryTableBody");
@@ -3548,7 +3643,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   function renderUI() {
     return `<div style="display:flex;flex-direction:column;gap:15px;">
-      <div class="summary-box" style="margin-bottom:0;"><b>${lastBackupText()}</b></div>
+      <div class="summary-box" style="margin-bottom:0;"><b>${lastBackupText()}</b>${cloudStatusInfo().ok ? "" : "<br><b>" + cloudStatusInfo().text + "</b>"}</div>
       <button class="btn-success" style="padding:16px;font-size:17px;font-weight:bold;" onclick="SBM.backup.shareBackup()">📤 ባካፕ ወደ ቴሌግራም ላክ</button>
       <p style="font-size:12px;color:var(--secondary);margin-top:-8px;">ቁልፉን ሲነኩ ቴሌግራምን ይምረጡ፣ ከዚያ <b>Saved Messages</b> (የራስዎ ሳጥን) ይንኩ።</p>
       <button class="btn-primary" style="padding:12px;font-size:15px;" onclick="SBM.backup.exportData()">💾 የዳታ ባካፕ አውርድ (Export)</button>
@@ -3611,6 +3706,16 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     if (d < 1) return "✅ የመጨረሻ ባካፕ፦ ዛሬ";
     return (d > 7 ? "⚠️ " : "") + "የመጨረሻ ባካፕ፦ ከ" + Math.floor(d) + " ቀን በፊት";
   }
+  /** የደመና ባካፕ ሁኔታ በአጭሩ — ስልክ ቢጠፋ ዳታው በደመና ላይ ደህና መሆኑን ያሳያል */
+  function cloudStatusInfo() {
+    const MSG = "📶 እባክዎን ኢንተርኔት ለተወሰኑ ደቂቃዎች ያብሩ";
+    const st = (SBM.sync && SBM.sync.status) ? SBM.sync.status() : null;
+    if (!st || !st.linked) return { ok: false, text: MSG };
+    const ageH = st.lastSync ? (Date.now() - st.lastSync) / 3600000 : Infinity;
+    if (ageH > 24) return { ok: false, text: MSG };
+    return { ok: true, text: "" }; // ሁሉም ደህና ከሆነ ምንም አይታይም (ደንበኛን ላለማሳሰብ)
+  }
+
   async function buildBackupText() {
     const snapshot = SBM.database.exportSnapshot();
     // Attach a checksum so a corrupted/tampered file can be detected on import.
@@ -3699,7 +3804,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   global.SBM = global.SBM || {};
-  global.SBM.backup = { renderUI, exportData, shareBackup, backupAgeDays, importData, resetAllData, refreshSyncStatus, syncNowUI };
+  global.SBM.backup = { renderUI, exportData, shareBackup, backupAgeDays, cloudStatusInfo, importData, resetAllData, refreshSyncStatus, syncNowUI };
 })(window);
 
 // ==== settings.js ====
