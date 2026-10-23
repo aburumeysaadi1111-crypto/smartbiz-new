@@ -590,6 +590,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       renderDashboardMenu();
       p.value = "";
       showToast("እንኳን ደህና መጡ " + result.name + "!");
+      if (SBM.auth.isAdmin() && SBM.backup && SBM.backup.backupAgeDays() > 7) {
+        setTimeout(() => showToast("💾 ባካፕ ከ7 ቀን በላይ ሆኗል — «ባካፕ & ማጽጃ» ውስጥ ይላኩ"), 9500);
+      }
       if (SBM.auth.isAdmin() && SBM.stock && SBM.stock.pendingRequestCount() > 0) {
         setTimeout(() => showToast("📥 " + SBM.stock.pendingRequestCount() + " የእቃ ጥያቄ ፍቃድዎን ይጠብቃል"), 6500);
       }
@@ -3545,6 +3548,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   function renderUI() {
     return `<div style="display:flex;flex-direction:column;gap:15px;">
+      <div class="summary-box" style="margin-bottom:0;"><b>${lastBackupText()}</b></div>
+      <button class="btn-success" style="padding:16px;font-size:17px;font-weight:bold;" onclick="SBM.backup.shareBackup()">📤 ባካፕ ወደ ቴሌግራም ላክ</button>
+      <p style="font-size:12px;color:var(--secondary);margin-top:-8px;">ቁልፉን ሲነኩ ቴሌግራምን ይምረጡ፣ ከዚያ <b>Saved Messages</b> (የራስዎ ሳጥን) ይንኩ።</p>
       <button class="btn-primary" style="padding:12px;font-size:15px;" onclick="SBM.backup.exportData()">💾 የዳታ ባካፕ አውርድ (Export)</button>
       <button class="btn-success" style="padding:12px;font-size:15px;" onclick="SBM.backup.importData()">📥 ባካፕ መልስ (Import)</button>
       <div style="font-size:12px;color:var(--secondary);background:rgba(0,0,0,.04);padding:10px;border-radius:8px;line-height:1.7;">
@@ -3592,20 +3598,61 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     refreshSyncStatus();
   }
 
-  async function exportData() {
-    if (!SBM.utils.requireAdmin()) return;
+  const LAST_BACKUP_KEY = "sbm_lastBackup";
+  function markBackup() { try { localStorage.setItem(LAST_BACKUP_KEY, String(Date.now())); } catch (e) {} }
+  function backupAgeDays() {
+    let t = 0;
+    try { t = parseInt(localStorage.getItem(LAST_BACKUP_KEY) || "0", 10); } catch (e) {}
+    return t ? (Date.now() - t) / 86400000 : Infinity;
+  }
+  function lastBackupText() {
+    const d = backupAgeDays();
+    if (d === Infinity) return "⚠️ እስካሁን ባካፕ አልወሰዱም";
+    if (d < 1) return "✅ የመጨረሻ ባካፕ፦ ዛሬ";
+    return (d > 7 ? "⚠️ " : "") + "የመጨረሻ ባካፕ፦ ከ" + Math.floor(d) + " ቀን በፊት";
+  }
+  async function buildBackupText() {
     const snapshot = SBM.database.exportSnapshot();
     // Attach a checksum so a corrupted/tampered file can be detected on import.
     const checksum = await SBM.auth.sha256Hex(JSON.stringify(snapshot));
-    const payload = { ...snapshot, checksum };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
+    return JSON.stringify({ ...snapshot, checksum });
+  }
+  function downloadBackup(text) {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(text);
     const a = document.createElement("a");
     a.setAttribute("href", dataStr);
     a.setAttribute("download", "smart_business_backup.json");
     document.body.appendChild(a);
     a.click();
     a.remove();
+  }
+
+  async function exportData() {
+    if (!SBM.utils.requireAdmin()) return;
+    downloadBackup(await buildBackupText());
+    markBackup();
     showToast("ባካፕ ወርዷል! ወደ ቴሌግራም/ደመና (Drive) ይላኩት");
+  }
+
+  /** አንድ ቁልፍ፦ የስልኩን የማጋራት ምናሌ ይከፍታል (ቴሌግራም → Saved Messages)። ካልተደገፈ ፋይሉ ይወርዳል። */
+  async function shareBackup() {
+    if (!SBM.utils.requireAdmin()) return;
+    const text = await buildBackupText();
+    const name = "smart_business_backup_" + new Date().toISOString().slice(0, 10) + ".json";
+    try {
+      const file = new File([text], name, { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "ባካፕ" });
+        markBackup();
+        showToast("ባካፕ ተልኳል ✅");
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // ተጠቃሚው ሰርዟል
+    }
+    downloadBackup(text);
+    markBackup();
+    showToast("ባካፕ ወርዷል! ከ«ፋይሎች» ወደ ቴሌግራም ይላኩት");
   }
 
   function importData() {
@@ -3652,7 +3699,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   global.SBM = global.SBM || {};
-  global.SBM.backup = { renderUI, exportData, importData, resetAllData, refreshSyncStatus, syncNowUI };
+  global.SBM.backup = { renderUI, exportData, shareBackup, backupAgeDays, importData, resetAllData, refreshSyncStatus, syncNowUI };
 })(window);
 
 // ==== settings.js ====
