@@ -201,6 +201,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       creditHistory: {},
       expenses: [],
       vatInputs: {},
+      stockRequests: [], // የሰራተኛ የእቃ ጥያቄዎች: { id, date, by, kind, desc, total, status, ... }
       stockCounts: [], // የስቶክ ቆጠራ መዝገብ: { id, date, by, adjusted, lines:[{name,unit,system,counted,diff,value}] }
       alerts: [], // ለአድሚን ማሳወቂያዎች: { id, date, type, by, text, amount, read }
       returns: [], // የተመላሽ እቃ መዝገብ (ኦዲት): { id, date, saleId, customer, items, amount, by, full }
@@ -267,6 +268,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       returns: DB.returns,
       alerts: DB.alerts,
       stockCounts: DB.stockCounts,
+      stockRequests: DB.stockRequests,
       monthlyReports: DB.monthlyReports,
       exportedAt: new Date().toISOString(),
       schemaVersion: 2,
@@ -276,7 +278,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   /** Restores business data fields from a parsed backup object. Never touches security data. */
   function importSnapshot(data) {
     if (!data || typeof data !== "object") throw new Error("Invalid backup payload");
-    const fields = ["stock", "sales", "credits", "creditHistory", "expenses", "companyName", "vatInputs", "vatEnabled", "debtPayments", "monthlyReports", "returns", "alerts", "stockCounts"];
+    const fields = ["stock", "sales", "credits", "creditHistory", "expenses", "companyName", "vatInputs", "vatEnabled", "debtPayments", "monthlyReports", "returns", "alerts", "stockCounts", "stockRequests"];
     fields.forEach((f) => {
       if (data[f] !== undefined) DB[f] = data[f];
     });
@@ -402,6 +404,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     { title: "የሽያጭ ታሪክ", icon: "📜", page: "salesHistory" },
     { title: "የተመላሽ መዝገብ", icon: "↩️", page: "returnsLog", adminOnly: true },
     { title: "ማሳወቂያ", icon: "🔔", page: "alerts", adminOnly: true },
+    { title: "የእቃ ጥያቄዎች", icon: "📥", page: "stockRequests", adminOnly: true },
     { title: "የስቶክ ቆጠራ", icon: "🧮", page: "stockCount", adminOnly: true },
     { title: "የብድር መዝገብ", icon: "💳", page: "credit" },
     { title: "ወጪዎች", icon: "💸", page: "expenses" },
@@ -454,6 +457,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       .map((i) => {
         let title = i.page === "pos" ? (vatOn ? "መሸጫ (POS + VAT)" : "መሸጫ (POS)") : i.title;
         if (i.page === "alerts") { const n = unreadAlertCount(); if (n > 0) title += " (" + n + " አዲስ)"; }
+        if (i.page === "stockRequests") { const n = SBM.stock && SBM.stock.pendingRequestCount ? SBM.stock.pendingRequestCount() : 0; if (n > 0) title += " (" + n + " ይጠብቃል)"; }
         return `<button type="button" class="menu-card" onclick="SBM.app.openPage('${escapeHTML(i.page)}')"><div class="card-icon">${i.icon}</div><div class="card-title">${escapeHTML(title)}</div></button>`;
       }).join("");
   }
@@ -471,6 +475,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       case "stock": title.innerText = "📦 የዕቃዎች መዝገብ (Stock)"; body.innerHTML = SBM.stock.renderUI(); break;
       case "pos": SBM.sales.resetSession(); title.innerText = SBM.DB.vatEnabled ? "🛒 መሸጫ ከ15% ቫት ጋር (POS)" : "🛒 መሸጫ (POS)"; body.innerHTML = SBM.sales.renderUI(); SBM.sales.onItemChange(); break;
       case "salesHistory": title.innerText = "📜 የሽያጭ ሰነድ እና ታሪክ"; body.innerHTML = SBM.report.renderSalesHistoryUI(); break;
+      case "stockRequests": title.innerText = "📥 የእቃ ጥያቄዎች (ፍቃድ)"; body.innerHTML = SBM.stock.renderRequestsUI(); break;
       case "stockCount": title.innerText = "🧮 የስቶክ ቆጠራ ማነጻጸሪያ"; body.innerHTML = SBM.stock.renderCountUI(); break;
       case "alerts": title.innerText = "🔔 ማሳወቂያዎች"; body.innerHTML = SBM.report.renderAlertsUI(); break;
       case "returnsLog": title.innerText = "↩️ የተመላሽ እቃዎች መዝገብ (ኦዲት)"; body.innerHTML = SBM.report.renderReturnsLogUI(); break;
@@ -585,6 +590,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       renderDashboardMenu();
       p.value = "";
       showToast("እንኳን ደህና መጡ " + result.name + "!");
+      if (SBM.auth.isAdmin() && SBM.stock && SBM.stock.pendingRequestCount() > 0) {
+        setTimeout(() => showToast("📥 " + SBM.stock.pendingRequestCount() + " የእቃ ጥያቄ ፍቃድዎን ይጠብቃል"), 6500);
+      }
       if (SBM.auth.isAdmin() && unreadAlertCount() > 0) {
         setTimeout(() => showToast("🔔 " + unreadAlertCount() + " አዲስ ማሳወቂያ አለ — «ማሳወቂያ» ይመልከቱ"), 3300);
       }
@@ -1400,6 +1408,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     (DB.returns || []).forEach((r) => { if (r && r.id != null) put("ret", r.id, r); });
     (DB.alerts || []).forEach((r) => { if (r && r.id != null) put("alert", r.id, r); });
     (DB.stockCounts || []).forEach((r) => { if (r && r.id != null) put("scount", r.id, r); });
+    (DB.stockRequests || []).forEach((r) => { if (r && r.id != null) put("sreq", r.id, r); });
     (DB.stock || []).forEach((r) => { if (r && r.id != null) put("stock", r.id, r); });
     (DB.credits || []).forEach((r) => { if (r && r.customer) put("credit", String(r.customer).toLowerCase(), r); });
     Object.keys(DB.creditHistory || {}).forEach((n) => put("chist", n, DB.creditHistory[n]));
@@ -1437,6 +1446,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       case "ret": arrOp("returns"); break;
       case "alert": arrOp("alerts"); break;
       case "scount": arrOp("stockCounts"); break;
+      case "sreq": arrOp("stockRequests"); break;
       case "credit": {
         if (!Array.isArray(DB.credits)) DB.credits = [];
         const i = DB.credits.findIndex((x) => x && String(x.customer || "").toLowerCase() === k);
@@ -1848,9 +1858,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function renderUI() {
-    if (!SBM.auth.isAdmin()) return renderViewOnlyUI();
     const list = DB.stock || [];
+    const isAdm = SBM.auth.isAdmin();
     return `
+      ${isAdm ? "" : '<p style="font-size:12px;color:var(--secondary);margin-bottom:8px;">አዲስ እቃ ወይም ጭነት መጠየቅ ይችላሉ። አድሚኑ ሲፈቅድ ብቻ ስቶክ ላይ ይጨመራል።</p>'}
       <input type="text" class="search-bar" placeholder="🔍 እቃ/ብራንድ መፈለጊያ..." onkeyup="SBM.stock.filter(this.value)">
       <div class="form-group"><label>የዕቃው ስም</label><input type="text" id="stkName"></div>
 
@@ -1898,9 +1909,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
       <button class="btn-primary" onclick="SBM.stock.add()">+ አዲስ ዕቃ መዝግብ</button>
       <div style="max-height:220px;overflow-y:auto;margin-top:15px;">
-        <table><thead><tr><th>ስም</th><th>ጠቅላላ ብዛት</th><th>የቅርብ መግዣ ዋጋ</th><th>ድርጊት</th></tr></thead>
+        <table><thead><tr>${isAdm ? "<th>ስም</th><th>ጠቅላላ ብዛት</th><th>የቅርብ መግዣ ዋጋ</th><th>ድርጊት</th>" : "<th>ስም</th><th>ጠቅላላ ብዛት</th><th>ጭነት</th>"}</tr></thead>
         <tbody id="stockTableBody">${generateRows(list)}</tbody></table>
-      </div>`;
+      </div>${isAdm ? "" : myRequestsHTML()}`;
   }
 
   function togglePurchaseType() {
@@ -1925,13 +1936,13 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   function generateRows(list) {
     const admin = SBM.auth.isAdmin();
-    if (!list || list.length === 0) return `<tr><td colspan="${admin ? 4 : 2}" style="text-align:center;">ምንም ዕቃ አልተመዘገበም</td></tr>`;
+    if (!list || list.length === 0) return `<tr><td colspan="${admin ? 4 : 3}" style="text-align:center;">ምንም ዕቃ አልተመዘገበም</td></tr>`;
     return list.map((item) => {
       const last = (item.batches && item.batches.length > 0) ? item.batches[item.batches.length - 1].buyPrice : (item.buyPrice || 0);
       const unit = escapeHTML(item.unit || "ፍሬ");
       const nameTd = `<td><b>${escapeHTML(item.name)}</b> ${item.qty <= 5 ? '<span style="color:red;">(አልቋል!)</span>' : ''}</td>`;
       // ሰራተኛ የመግዣ ዋጋ እና የማስተካከያ ቁልፎችን አያይም (የመግዣ ዋጋ ትርፍን ያሳያል)
-      if (!admin) return `<tr>${nameTd}<td>${formatQty(item)}</td></tr>`;
+      if (!admin) return `<tr>${nameTd}<td>${formatQty(item)}</td><td class="action-btns"><button class="btn-success" onclick="SBM.stock.restock(${item.id})">+ጫን</button></td></tr>`;
       return `<tr>${nameTd}
         <td>${formatQty(item)}</td><td>${Number(last).toFixed(2)} ETB/${unit}</td>
         <td class="action-btns">
@@ -1948,7 +1959,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     if (b) b.innerHTML = generateRows(f);
   }
 
-  function saveItem(name, unit, bulkUnit, bulkConversion, qty, buy) {
+  /** ስቶክ ላይ ለውጡን በትክክል የሚፈጽም (አድሚን ሲፈቅድ ወይም አድሚን ራሱ ሲመዘግብ) */
+  function applyNewItem(name, unit, bulkUnit, bulkConversion, qty, buy) {
     let ex = DB.stock.find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
     if (ex) {
       ex.qty += qty;
@@ -1961,12 +1973,100 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       DB.stock.push({ id: Date.now(), name, unit, bulkUnit, bulkConversion, qty, buyPrice: buy, batches: [{ qty, buyPrice: buy }] });
     }
     SBM.database.save("stock");
+  }
+  function applyRestock(itemId, totalSmall, unitPrice) {
+    const item = DB.stock.find((i) => i.id === itemId);
+    if (!item) return false;
+    if (!item.batches) item.batches = [];
+    item.batches.push({ qty: totalSmall, buyPrice: unitPrice });
+    item.qty += totalSmall;
+    item.buyPrice = unitPrice;
+    SBM.database.save("stock");
+    return true;
+  }
+
+  // ---------- የእቃ ጥያቄ (ሰራተኛ ይልካል፣ አድሚን ይፈቅዳል/ይከለክላል) ----------
+  function createRequest(req) {
+    if (!Array.isArray(DB.stockRequests)) DB.stockRequests = [];
+    const s = SBM.auth.getSession();
+    const full = Object.assign({ id: Date.now(), date: SBM.utils.getEthDateStr(), by: s ? s.name : "", status: "pending" }, req);
+    DB.stockRequests.push(full);
+    SBM.database.save("stockRequests");
+    SBM.app.addAlert("stockReq", "የእቃ ጥያቄ ላከ፦ " + full.desc, full.total);
+    showToast("ጥያቄው ለአድሚን ተልኳል። እስኪፈቀድ ስቶክ ላይ አይጨመርም ⏳");
+    SBM.app.openPage("stock");
+  }
+
+  function saveItem(name, unit, bulkUnit, bulkConversion, qty, buy) {
+    if (!SBM.auth.isAdmin()) {
+      return createRequest({ kind: "new", name, unit, bulkUnit, bulkConversion, qty, buy, total: qty * buy,
+        desc: name + " — " + qty + " " + unit + " @ " + Number(buy).toFixed(2) + " ETB/" + unit });
+    }
+    applyNewItem(name, unit, bulkUnit, bulkConversion, qty, buy);
     showToast(`እቃው ተመዝግቧል! (${Number(buy).toFixed(2)} ETB/${escapeHTML(unit)})`);
     SBM.app.openPage("stock");
   }
 
-  function add() {
+  function pendingRequestCount() {
+    return (DB.stockRequests || []).filter((r) => r && r.status === "pending").length;
+  }
+
+  function renderRequestsUI() {
+    if (!SBM.utils.requireAdmin()) return "";
+    const list = (DB.stockRequests || []).slice().reverse();
+    const pend = list.filter((r) => r.status === "pending");
+    const done = list.filter((r) => r.status !== "pending").slice(0, 10);
+    const kindTxt = (r) => (r.kind === "new" ? "🆕 አዲስ እቃ" : "➕ ጭነት");
+    const pendRows = pend.length === 0 ? '<tr><td colspan="2" style="text-align:center;">ምንም በመጠባበቅ ላይ ያለ ጥያቄ የለም</td></tr>'
+      : pend.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br><small>👤 ${escapeHTML(r.by)}</small><br>${kindTxt(r)}<br><b>${escapeHTML(r.desc)}</b><br><small>ጠቅላላ፦ ${Number(r.total || 0).toFixed(2)} ETB</small></td>
+        <td class="action-btns" style="flex-direction:column;"><button class="btn-success" onclick="SBM.stock.approveRequest(${Number(r.id)})">✔ ፍቀድ</button><button class="btn-danger" onclick="SBM.stock.rejectRequest(${Number(r.id)})">✖ ከልክል</button></td></tr>`).join("");
+    const doneRows = done.map((r) => `<tr><td><small>${escapeHTML(r.date)} · 👤 ${escapeHTML(r.by)}</small><br>${escapeHTML(r.desc)}</td>
+      <td style="color:${r.status === "approved" ? "#28a745" : "#dc3545"};">${r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል"}${r.note ? "<br><small>" + escapeHTML(r.note) + "</small>" : ""}</td></tr>`).join("");
+    return `<div class="summary-box"><b>${pend.length} በመጠባበቅ ላይ</b></div>
+      <table><tbody>${pendRows}</tbody></table>
+      ${doneRows ? `<h4 style="margin-top:14px;">የቅርብ ውሳኔዎች</h4><table><tbody>${doneRows}</tbody></table>` : ""}`;
+  }
+
+  function approveRequest(id) {
     if (!SBM.utils.requireAdmin()) return;
+    const r = (DB.stockRequests || []).find((x) => Number(x.id) === Number(id));
+    if (!r || r.status !== "pending") return;
+    if (r.kind === "new") {
+      applyNewItem(r.name, r.unit, r.bulkUnit, r.bulkConversion, Number(r.qty), Number(r.buy));
+    } else if (!applyRestock(r.itemId, Number(r.qty), Number(r.unitPrice))) {
+      return alert("ይህ እቃ ከስቶክ ተሰርዟል፤ ጭነቱን መጨመር አይቻልም።");
+    }
+    r.status = "approved"; r.decidedBy = SBM.auth.currentName(); r.decidedDate = SBM.utils.getEthDateStr();
+    SBM.database.save("stockRequests");
+    showToast("ተፈቅዷል፤ ስቶክ ተጨምሯል ✅");
+    SBM.app.renderDashboardMenu();
+    SBM.app.openPage("stockRequests");
+  }
+
+  function rejectRequest(id) {
+    if (!SBM.utils.requireAdmin()) return;
+    const r = (DB.stockRequests || []).find((x) => Number(x.id) === Number(id));
+    if (!r || r.status !== "pending") return;
+    const note = prompt("የመከልከል ምክንያት (አማራጭ)፡", "");
+    if (note === null) return;
+    r.status = "rejected"; r.note = note.trim(); r.decidedBy = SBM.auth.currentName(); r.decidedDate = SBM.utils.getEthDateStr();
+    SBM.database.save("stockRequests");
+    showToast("ተከልክሏል ❌");
+    SBM.app.renderDashboardMenu();
+    SBM.app.openPage("stockRequests");
+  }
+
+  /** ሰራተኛው የራሱን የጥያቄዎች ሁኔታ ያያል */
+  function myRequestsHTML() {
+    const me = SBM.auth.currentName();
+    const mine = (DB.stockRequests || []).filter((r) => r.by === me).slice(-6).reverse();
+    if (mine.length === 0) return "";
+    const st = (r) => (r.status === "pending" ? "⏳ በመጠባበቅ" : r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል" + (r.note ? " (" + escapeHTML(r.note) + ")" : ""));
+    return `<h4 style="margin-top:14px;">የእኔ ጥያቄዎች</h4><table><tbody>${mine.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br>${escapeHTML(r.desc)}</td><td>${st(r)}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  function add() {
+    if (!SBM.auth.getSession()) return;
     const name = (document.getElementById("stkName").value || "").trim();
     const type = document.getElementById("stkPurchaseType").value;
     if (!name) return alert("እባክዎን የዕቃ ስም ያስገቡ!");
@@ -2018,7 +2118,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function restock(id) {
-    if (!SBM.utils.requireAdmin()) return;
+    if (!SBM.auth.getSession()) return;
     const item = DB.stock.find((i) => i.id === id);
     if (!item) return;
     const bulkLabel = item.bulkUnit || item.unit || "ፍሬ";
@@ -2032,11 +2132,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const totalSmall = count * conv;
     const unitPrice = (count * price) / totalSmall;
 
-    if (!item.batches) item.batches = [];
-    item.batches.push({ qty: totalSmall, buyPrice: unitPrice });
-    item.qty += totalSmall;
-    item.buyPrice = unitPrice;
-    SBM.database.save("stock");
+    if (!SBM.auth.isAdmin()) {
+      return createRequest({ kind: "restock", itemId: item.id, name: item.name, qty: totalSmall, unitPrice, total: count * price,
+        desc: "ጭነት፦ " + item.name + " — " + count + " " + bulkLabel + " @ " + price + " ETB/" + bulkLabel });
+    }
+    applyRestock(item.id, totalSmall, unitPrice);
     showToast(`አዲስ ጭነት ተጨምሯል! (${Number(unitPrice).toFixed(2)} ETB/${escapeHTML(item.unit)})`);
     SBM.app.openPage("stock");
   }
@@ -2139,7 +2239,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <button class="btn-primary" style="flex:1;" onclick="SBM.app.printModalContent()">🖨️ አትም</button></div>`;
   }
 
-  global.SBM.stock = { renderCountUI, submitCount, renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
+  global.SBM.stock = { renderRequestsUI, approveRequest, rejectRequest, pendingRequestCount, renderCountUI, submitCount, renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
 })(window);
 
 // ==== sales.js ====
@@ -3176,7 +3276,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   function renderAlertsUI() {
     const list = (DB.alerts || []).slice().reverse();
     const unread = list.filter((a) => !a.read).length;
-    const icon = (t) => (t === "belowCost" ? "⚠️" : t === "return" ? "↩️" : t === "expense" ? "💸" : "🔔");
+    const icon = (t) => (t === "belowCost" ? "⚠️" : t === "return" ? "↩️" : t === "expense" ? "💸" : t === "stock" ? "📦" : t === "stockReq" ? "📥" : "🔔");
     const rows = list.length === 0
       ? '<tr><td colspan="2" style="text-align:center;">ምንም ማሳወቂያ የለም</td></tr>'
       : list.map((a) => `<tr style="${a.read ? "opacity:.6;" : "font-weight:600;"}"><td><small>${escapeHTML(a.date)}</small><br><small>👤 ${escapeHTML(a.by || "")}</small></td>
