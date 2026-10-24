@@ -1871,16 +1871,16 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       <input type="text" class="search-bar" placeholder="🔍 እቃ/ብራንድ መፈለጊያ..." onkeyup="SBM.stock.filter(this.value)">
       <div class="form-group"><label>የዕቃው ስም</label><input type="text" id="stkName"></div>
 
-      <div class="form-group"><label>የግዢ ዓይነት</label>
-        <select id="stkPurchaseType" onchange="SBM.stock.togglePurchaseType()">
-          <option value="quintal">ኩንታል</option>
-          <option value="carton">ካርቶን</option>
-          <option value="dozen">ደርዘን</option>
-          <option value="crate">ካሳ</option>
-          <option value="liter">ጀሪካን/በርሜል (ሊትር)</option>
-          <option value="meter">ጥቅል (ሜትር) — ጨርቅ፣ ገመድ፣ ሽቦ</option>
-          <option value="piece">ሌላ/ነጠላ (ፍሬ፣ ኪሎ፣ ሊትር፣ ሜትር)</option>
+      <div class="form-group"><label>የዕቃው መለኪያ</label>
+        <select id="stkCategory" onchange="SBM.stock.onCategoryChange()">
+          <option value="weight">⚖️ በክብደት (ኪሎ / ኩንታል)</option>
+          <option value="liquid">💧 በፈሳሽ (ሊትር)</option>
+          <option value="length">📏 በርዝመት (ሜትር)</option>
+          <option value="count">🔢 በቁጥር (ፍሬ)</option>
         </select>
+      </div>
+      <div class="form-group"><label>እንዴት ገዙ?</label>
+        <select id="stkPurchaseType" onchange="SBM.stock.togglePurchaseType()">${purchaseOptionsHTML("weight")}</select>
       </div>
 
       <div id="stkQuintalFields">
@@ -1907,6 +1907,13 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <div class="form-group"><label>የአንዱ ካሳ ዋጋ (ETB)</label><input type="number" id="stkCratePrice" placeholder="ዋጋ ያስገቡ"></div>
       </div>
 
+      <div id="stkKgpackFields" class="hidden">
+        <div class="form-group"><label>የዕቃው መያዣ ስም</label><input type="text" id="stkKgpackName" value="ከረጢት" placeholder="ከረጢት / ሣጥን"></div>
+        <div class="form-group"><label>አንዱ ስንት ኪሎ ይይዛል?</label><input type="number" id="stkKgpackPer" placeholder="ለምሳሌ 25"></div>
+        <div class="form-group"><label>ስንት ገዙ?</label><input type="number" id="stkKgpackCount" placeholder="ብዛት ያስገቡ"></div>
+        <div class="form-group"><label>የአንዱ ዋጋ (ETB)</label><input type="number" id="stkKgpackPrice" placeholder="ዋጋ ያስገቡ"></div>
+      </div>
+
       <div id="stkLiterFields" class="hidden">
         <div class="form-group"><label>የዕቃው መያዣ ስም</label><input type="text" id="stkLiterName" value="ጀሪካን" placeholder="ጀሪካን / በርሜል"></div>
         <div class="form-group"><label>አንዱ ስንት ሊትር ይይዛል?</label><input type="number" id="stkLiterPer" placeholder="ለምሳሌ 20"></div>
@@ -1922,7 +1929,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       </div>
 
       <div id="stkPieceFields" class="hidden">
-        <div class="form-group"><label>የመሸጫ አሃድ (ፍሬ፣ ኪሎ፣ ሊትር፣ ሜትር…)</label><input type="text" id="stkPieceUnit" list="stkUnitList" value="ፍሬ" placeholder="ፍሬ"><datalist id="stkUnitList"><option value="ፍሬ"><option value="ኪሎ"><option value="ሊትር"><option value="ሜትር"></datalist></div>
+        <div class="form-group"><label>የመሸጫ አሃድ</label><input type="text" id="stkPieceUnit" value="ኪሎ" readonly></div>
         <div style="display:flex;gap:10px;">
           <div class="form-group" style="flex:1"><label>ብዛት</label><input type="number" id="stkPieceQty"></div>
           <div class="form-group" style="flex:1"><label>የአንዱ መግዣ ዋጋ (ETB)</label><input type="number" id="stkPiecePrice"></div>
@@ -1936,12 +1943,32 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       </div>${isAdm ? "" : myRequestsHTML()}`;
   }
 
+  const CATEGORY_METHODS = {
+    weight: [["quintal", "ኩንታል"], ["kgpack", "ከረጢት / ሣጥን (ኪሎ የያዘ)"], ["piece", "ነጠላ ኪሎ (ያለ መያዣ)"]],
+    liquid: [["liter", "ጀሪካን / በርሜል (ሊትር የያዘ)"], ["piece", "ነጠላ ሊትር (ያለ መያዣ)"]],
+    length: [["meter", "ጥቅል (ሜትር የያዘ)"], ["piece", "ነጠላ ሜትር (ያለ መያዣ)"]],
+    count: [["carton", "ካርቶን"], ["dozen", "ደርዘን"], ["crate", "ካሳ"], ["piece", "ነጠላ ፍሬ"]],
+  };
+  const CATEGORY_UNIT = { weight: "ኪሎ", liquid: "ሊትር", length: "ሜትር", count: "ፍሬ" };
+  function purchaseOptionsHTML(cat) {
+    return (CATEGORY_METHODS[cat] || CATEGORY_METHODS.weight).map((m) => `<option value="${m[0]}">${m[1]}</option>`).join("");
+  }
+  function onCategoryChange() {
+    const cat = document.getElementById("stkCategory").value;
+    document.getElementById("stkPurchaseType").innerHTML = purchaseOptionsHTML(cat);
+    const u = document.getElementById("stkPieceUnit");
+    u.value = CATEGORY_UNIT[cat] || "ፍሬ";
+    u.readOnly = cat !== "count"; // በቁጥር ብቻ የአሃድ ስም ማስተካከል ይቻላል (ለምሳሌ ጥንድ)
+    togglePurchaseType();
+  }
+
   function togglePurchaseType() {
     const type = document.getElementById("stkPurchaseType").value;
     document.getElementById("stkQuintalFields").classList.toggle("hidden", type !== "quintal");
     document.getElementById("stkCartonFields").classList.toggle("hidden", type !== "carton");
     document.getElementById("stkDozenFields").classList.toggle("hidden", type !== "dozen");
     document.getElementById("stkCrateFields").classList.toggle("hidden", type !== "crate");
+    document.getElementById("stkKgpackFields").classList.toggle("hidden", type !== "kgpack");
     document.getElementById("stkLiterFields").classList.toggle("hidden", type !== "liter");
     document.getElementById("stkMeterFields").classList.toggle("hidden", type !== "meter");
     document.getElementById("stkPieceFields").classList.toggle("hidden", type !== "piece");
@@ -2132,10 +2159,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       const unitPrice = (count * price) / totalSmall;
       saveItem(name, "ፍሬ", "ካሳ", pieces, totalSmall, unitPrice);
 
-    } else if (type === "liter" || type === "meter") {
-      const pre = type === "liter" ? "stkLiter" : "stkMeter";
-      const base = type === "liter" ? "ሊትር" : "ሜትር";
-      const cont = (document.getElementById(pre + "Name").value || "").trim() || (type === "liter" ? "ጀሪካን" : "ጥቅል");
+    } else if (type === "liter" || type === "meter" || type === "kgpack") {
+      const pre = type === "liter" ? "stkLiter" : type === "meter" ? "stkMeter" : "stkKgpack";
+      const base = type === "liter" ? "ሊትር" : type === "meter" ? "ሜትር" : "ኪሎ";
+      const cont = (document.getElementById(pre + "Name").value || "").trim() || (type === "liter" ? "ጀሪካን" : type === "meter" ? "ጥቅል" : "ከረጢት");
       const per = parseFloat(document.getElementById(pre + "Per").value) || 0;
       const count = parseFloat(document.getElementById(pre + "Count").value) || 0;
       const price = parseFloat(document.getElementById(pre + "Price").value) || 0;
@@ -2276,7 +2303,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <button class="btn-primary" style="flex:1;" onclick="SBM.app.printModalContent()">🖨️ አትም</button></div>`;
   }
 
-  global.SBM.stock = { renderRequestsUI, approveRequest, rejectRequest, pendingRequestCount, renderCountUI, submitCount, renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
+  global.SBM.stock = { onCategoryChange, renderRequestsUI, approveRequest, rejectRequest, pendingRequestCount, renderCountUI, submitCount, renderUI, togglePurchaseType, generateRows, filter, add, restock, edit, remove, formatQty };
 })(window);
 
 // ==== sales.js ====
