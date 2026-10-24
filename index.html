@@ -477,8 +477,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       case "salesHistory": title.innerText = "📜 የሽያጭ ሰነድ እና ታሪክ"; body.innerHTML = SBM.report.renderSalesHistoryUI(); break;
       case "stockRequests": title.innerText = "📥 የእቃ ጥያቄዎች (ፍቃድ)"; body.innerHTML = SBM.stock.renderRequestsUI(); break;
       case "stockCount": title.innerText = "🧮 የስቶክ ቆጠራ ማነጻጸሪያ"; body.innerHTML = SBM.stock.renderCountUI(); break;
-      case "returnsTrash": title.innerText = "🙈 የተደበቁ የተመላሽ መዝገቦች"; body.innerHTML = SBM.report.renderItemTrashUI("returns"); break;
-      case "requestsTrash": title.innerText = "🙈 የተደበቁ የእቃ ጥያቄዎች"; body.innerHTML = SBM.report.renderItemTrashUI("stockRequests"); break;
+      case "returnsTrash": title.innerText = "📁 የተቀመጡ የተመላሽ መዝገቦች"; body.innerHTML = SBM.report.renderItemTrashUI("returns"); break;
+      case "requestsTrash": title.innerText = "📁 የተቀመጡ የእቃ ጥያቄዎች"; body.innerHTML = SBM.report.renderItemTrashUI("stockRequests"); break;
       case "alertsTrash": title.innerText = "♻️ ቆሻሻ ማጠራቀሚያ (ማሳወቂያ)"; body.innerHTML = SBM.report.renderAlertsTrashUI(); break;
       case "alerts": title.innerText = "🔔 ማሳወቂያዎች"; body.innerHTML = SBM.report.renderAlertsUI(); break;
       case "returnsLog": title.innerText = "↩️ የተመላሽ እቃዎች መዝገብ (ኦዲት)"; body.innerHTML = SBM.report.renderReturnsLogUI(); break;
@@ -2078,10 +2078,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <td class="action-btns" style="flex-direction:column;"><button class="btn-success" onclick="SBM.stock.approveRequest(${Number(r.id)})">✔ ፍቀድ</button><button class="btn-danger" onclick="SBM.stock.rejectRequest(${Number(r.id)})">✖ ከልክል</button></td></tr>`).join("");
     const doneRows = done.map((r) => `<tr><td><small>${escapeHTML(r.date)} · 👤 ${escapeHTML(r.by)}</small><br>${escapeHTML(r.desc)}</td>
       <td style="color:${r.status === "approved" ? "#28a745" : "#dc3545"};">${r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል"}${r.note ? "<br><small>" + escapeHTML(r.note) + "</small>" : ""}
-        <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('stockRequests', ${Number(r.id)})">🙈 ደብቅ</button></div></td></tr>`).join("");
+        <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('stockRequests', ${Number(r.id)})">📁 አስቀምጥ</button></div></td></tr>`).join("");
     return `<div class="summary-box"><b>${pend.length} በመጠባበቅ ላይ</b></div>
       <table><tbody>${pendRows}</tbody></table>
-      <button class="btn-secondary" style="width:100%;padding:8px;margin-top:10px;" onclick="SBM.app.openPage('requestsTrash')">🙈 የተደበቁ (${trashCount})</button>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-top:10px;" onclick="SBM.app.openPage('requestsTrash')">📁 የተቀመጡ (${trashCount})</button>
       ${doneRows ? `<h4 style="margin-top:14px;">የቅርብ ውሳኔዎች</h4><table><tbody>${doneRows}</tbody></table>` : ""}`;
   }
 
@@ -3474,10 +3474,10 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const it = findItem(coll, id);
     if (!it) return;
     if (coll === "stockRequests" && it.status === "pending") return alert("ገና ውሳኔ ያልተሰጠው ጥያቄ አይጠፋም፤ መጀመሪያ ይፍቀዱ ወይም ይከልክሉ።");
-    if (!confirm("ከዝርዝሩ ይደበቅ? (ዱካው ለዘላለም ይቀመጣል፤ በኋላ መመለስ ይችላሉ)")) return;
+    if (!confirm("ከዝርዝሩ ወጥቶ ወደ «የተቀመጡ» ይወሰድ? (ዱካው ለዘላለም ይቀመጣል፤ በኋላ መመለስ ይችላሉ)")) return;
     it.trashedAt = Date.now();
     SBM.database.save(coll);
-    showToast("ተደብቋል 🙈 (ዱካው ተቀምጧል)");
+    showToast("ተቀምጧል 📁 (ዱካው አይጠፋም)");
     if (coll === "stockRequests") SBM.app.renderDashboardMenu();
     SBM.app.openPage(TRASHABLE[coll].page);
   }
@@ -3526,7 +3526,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       : list.map((x) => `<tr><td><small>${escapeHTML(x.date)}</small><br><small>👤 ${escapeHTML(x.by || "")}</small><br></td>
         <td>${body(x)}<div style="display:flex;gap:6px;margin-top:6px;">
           <button class="btn-success" style="padding:4px 8px;font-size:12px;" onclick="SBM.report.restoreItem('${coll}', ${Number(x.id)})">↩️ መልስ</button></div></td></tr>`).join("");
-    return `<div class="summary-box"><b>${list.length} የተደበቁ (${escapeHTML(T.title)})</b><br><small>🔒 ለኦዲት ዱካ ለዘላለም አይጠፉም፤ በፈለጉ ጊዜ መመለስ ይችላሉ።</small></div>
+    return `<div class="summary-box"><b>${list.length} የተቀመጡ (${escapeHTML(T.title)})</b><br><small>🔒 ለኦዲት ዱካ ለዘላለም አይጠፉም፤ በፈለጉ ጊዜ መመለስ ይችላሉ።</small></div>
       <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('${T.page}')">⬅ ተመለስ</button>
       <div style="max-height:340px;overflow-y:auto;"><table><tbody>${rows}</tbody></table></div>`;
   }
@@ -3551,9 +3551,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
         <td><b>${escapeHTML(r.customer || "")}</b><br><small>የሽያጭ ቀን፡ ${escapeHTML(r.saleDate || "")}</small></td>
         <td><small>${escapeHTML(r.items || "")}</small>${r.creditReduced > 0 ? "<br><small>💳 ዕዳ ቀንሷል " + Number(r.creditReduced).toFixed(2) + "</small>" : ""}</td>
         <td><b>${Number(r.amount || 0).toFixed(2)}</b><br><small>${r.full ? "ሙሉ" : "ከፊል"}</small>
-          <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('returns', ${Number(r.id)})">🙈 ደብቅ</button></div></td></tr>`).join("");
-    return `<div class="summary-box"><b>ጠቅላላ የተመለሰ፦ ${total.toFixed(2)} ETB</b> (${list.length} መዝገብ)<br><small>🔒 መዝገቡ ለኦዲት ለዘላለም ይቀመጣል — የተሳሳተ ምዝገባን መደበቅ ብቻ ይቻላል (ለአድሚን)</small></div>
-      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('returnsTrash')">🙈 የተደበቁ (${trashCount})</button>
+          <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('returns', ${Number(r.id)})">📁 አስቀምጥ</button></div></td></tr>`).join("");
+    return `<div class="summary-box"><b>ጠቅላላ የተመለሰ፦ ${total.toFixed(2)} ETB</b> (${list.length} መዝገብ)<br><small>🔒 መዝገቡ ለኦዲት ለዘላለም ይቀመጣል — የተሳሳተ ምዝገባን ወደ «የተቀመጡ» ማንቀሳቀስ ብቻ ይቻላል (ለአድሚን)</small></div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('returnsTrash')">📁 የተቀመጡ (${trashCount})</button>
       <div style="max-height:380px;overflow-y:auto;"><table><thead><tr><th>መቼ/ማን</th><th>ደንበኛ</th><th>የተመለሰ እቃ</th><th>ብር</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
