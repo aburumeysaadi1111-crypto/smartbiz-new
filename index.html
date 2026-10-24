@@ -416,7 +416,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   ];
 
   // ለአድሚን ብቻ የተፈቀዱ ገጾች (ሰራተኛ በሜኑ ላይ አያያቸውም፤ በቀጥታ ለመክፈት ቢሞክርም ይታገዳል)
-  const ADMIN_PAGES = new Set(menuItems.filter((i) => i.adminOnly).map((i) => i.page));
+  const ADMIN_PAGES = new Set([...menuItems.filter((i) => i.adminOnly).map((i) => i.page), "alertsTrash", "returnsTrash", "requestsTrash"]);
 
   /** ተግባሩ ለአድሚን ብቻ ከሆነ — አድሚን ካልሆነ መልእክት አሳይቶ false ይመልሳል። */
   function requireAdmin() {
@@ -477,6 +477,9 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       case "salesHistory": title.innerText = "📜 የሽያጭ ሰነድ እና ታሪክ"; body.innerHTML = SBM.report.renderSalesHistoryUI(); break;
       case "stockRequests": title.innerText = "📥 የእቃ ጥያቄዎች (ፍቃድ)"; body.innerHTML = SBM.stock.renderRequestsUI(); break;
       case "stockCount": title.innerText = "🧮 የስቶክ ቆጠራ ማነጻጸሪያ"; body.innerHTML = SBM.stock.renderCountUI(); break;
+      case "returnsTrash": title.innerText = "🙈 የተደበቁ የተመላሽ መዝገቦች"; body.innerHTML = SBM.report.renderItemTrashUI("returns"); break;
+      case "requestsTrash": title.innerText = "🙈 የተደበቁ የእቃ ጥያቄዎች"; body.innerHTML = SBM.report.renderItemTrashUI("stockRequests"); break;
+      case "alertsTrash": title.innerText = "♻️ ቆሻሻ ማጠራቀሚያ (ማሳወቂያ)"; body.innerHTML = SBM.report.renderAlertsTrashUI(); break;
       case "alerts": title.innerText = "🔔 ማሳወቂያዎች"; body.innerHTML = SBM.report.renderAlertsUI(); break;
       case "returnsLog": title.innerText = "↩️ የተመላሽ እቃዎች መዝገብ (ኦዲት)"; body.innerHTML = SBM.report.renderReturnsLogUI(); break;
       case "dailyReport": title.innerText = "📅 የዕለት ሽያጭ ሪፖርት"; body.innerHTML = SBM.report.renderDailyReportUI(); break;
@@ -590,6 +593,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       renderDashboardMenu();
       p.value = "";
       showToast("እንኳን ደህና መጡ " + result.name + "!");
+      if (SBM.auth.isAdmin() && SBM.report && SBM.report.pruneAlertTrash) { SBM.report.pruneAlertTrash(); SBM.report.pruneItemTrash(); }
       if (SBM.auth.isAdmin() && SBM.backup && SBM.backup.cloudStatusInfo && !SBM.backup.cloudStatusInfo().ok) {
         setTimeout(() => showToast(SBM.backup.cloudStatusInfo().text), 12000);
       }
@@ -2064,7 +2068,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
 
   function renderRequestsUI() {
     if (!SBM.utils.requireAdmin()) return "";
-    const list = (DB.stockRequests || []).slice().reverse();
+    const list = (DB.stockRequests || []).filter((r) => !r.trashedAt).slice().reverse();
+    const trashCount = (DB.stockRequests || []).filter((r) => r.trashedAt).length;
     const pend = list.filter((r) => r.status === "pending");
     const done = list.filter((r) => r.status !== "pending").slice(0, 10);
     const kindTxt = (r) => (r.kind === "new" ? "🆕 አዲስ እቃ" : "➕ ጭነት");
@@ -2072,9 +2077,11 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       : pend.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br><small>👤 ${escapeHTML(r.by)}</small><br>${kindTxt(r)}<br><b>${escapeHTML(r.desc)}</b><br><small>ጠቅላላ፦ ${Number(r.total || 0).toFixed(2)} ETB</small></td>
         <td class="action-btns" style="flex-direction:column;"><button class="btn-success" onclick="SBM.stock.approveRequest(${Number(r.id)})">✔ ፍቀድ</button><button class="btn-danger" onclick="SBM.stock.rejectRequest(${Number(r.id)})">✖ ከልክል</button></td></tr>`).join("");
     const doneRows = done.map((r) => `<tr><td><small>${escapeHTML(r.date)} · 👤 ${escapeHTML(r.by)}</small><br>${escapeHTML(r.desc)}</td>
-      <td style="color:${r.status === "approved" ? "#28a745" : "#dc3545"};">${r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል"}${r.note ? "<br><small>" + escapeHTML(r.note) + "</small>" : ""}</td></tr>`).join("");
+      <td style="color:${r.status === "approved" ? "#28a745" : "#dc3545"};">${r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል"}${r.note ? "<br><small>" + escapeHTML(r.note) + "</small>" : ""}
+        <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('stockRequests', ${Number(r.id)})">🙈 ደብቅ</button></div></td></tr>`).join("");
     return `<div class="summary-box"><b>${pend.length} በመጠባበቅ ላይ</b></div>
       <table><tbody>${pendRows}</tbody></table>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-top:10px;" onclick="SBM.app.openPage('requestsTrash')">🙈 የተደበቁ (${trashCount})</button>
       ${doneRows ? `<h4 style="margin-top:14px;">የቅርብ ውሳኔዎች</h4><table><tbody>${doneRows}</tbody></table>` : ""}`;
   }
 
@@ -2110,7 +2117,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   /** ሰራተኛው የራሱን የጥያቄዎች ሁኔታ ያያል */
   function myRequestsHTML() {
     const me = SBM.auth.currentName();
-    const mine = (DB.stockRequests || []).filter((r) => r.by === me).slice(-6).reverse();
+    const mine = (DB.stockRequests || []).filter((r) => r.by === me && !r.trashedAt).slice(-6).reverse();
     if (mine.length === 0) return "";
     const st = (r) => (r.status === "pending" ? "⏳ በመጠባበቅ" : r.status === "approved" ? "✅ ተፈቅዷል" : "❌ ተከልክሏል" + (r.note ? " (" + escapeHTML(r.note) + ")" : ""));
     return `<h4 style="margin-top:14px;">የእኔ ጥያቄዎች</h4><table><tbody>${mine.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br>${escapeHTML(r.desc)}</td><td>${st(r)}</td></tr>`).join("")}</tbody></table>`;
@@ -3338,7 +3345,8 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   }
 
   function renderAlertsUI() {
-    const list = (DB.alerts || []).slice().reverse();
+    const list = (DB.alerts || []).filter((a) => !a.trashedAt).reverse();
+    const trashCount = (DB.alerts || []).filter((a) => a.trashedAt).length;
     const unread = list.filter((a) => !a.read).length;
     const icon = (t) => (t === "belowCost" ? "⚠️" : t === "return" ? "↩️" : t === "expense" ? "💸" : t === "stock" ? "📦" : t === "stockReq" ? "📥" : "🔔");
     const rows = list.length === 0
@@ -3346,12 +3354,102 @@ th{background:rgba(0,0,0,.03);font-weight:600}
       : list.map((a) => `<tr style="${a.read ? "opacity:.6;" : "font-weight:600;"}"><td><small>${escapeHTML(a.date)}</small><br><small>👤 ${escapeHTML(a.by || "")}</small></td>
         <td>${icon(a.type)} ${escapeHTML(a.text || "")}${a.amount ? "<br><b>" + Number(a.amount).toFixed(2) + " ETB</b>" : ""}${a.read ? "" : ' <span class="overdue-badge">አዲስ</span>'}</td></tr>`).join("");
     return `<div class="summary-box"><b>${unread} ያልተነበበ ማሳወቂያ</b></div>
-      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.report.markAllAlertsRead()">✔ ሁሉንም እንደተነበበ ምልክት አድርግ</button>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button class="btn-secondary" style="flex:1;padding:8px;" onclick="SBM.report.markAllAlertsRead()">✔ ሁሉንም እንደተነበበ አድርግ</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button class="btn-danger" style="flex:1;padding:8px;" onclick="SBM.report.trashReadAlerts()">🗑️ ለጊዜው አጽዳ</button>
+        <button class="btn-danger" style="flex:1;padding:8px;background:#7a1b24;" onclick="SBM.report.deleteReadAlertsForever()">❌ ለዘላለም አጽዳ</button>
+      </div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('alertsTrash')">♻️ ቆሻሻ ማጠራቀሚያ (${trashCount})</button>
       <div style="max-height:360px;overflow-y:auto;"><table><thead><tr><th>መቼ/ማን</th><th>ዝርዝር</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  const TRASH_DAYS = 60;
+  const liveAlerts = () => (DB.alerts || []).filter((a) => !a.trashedAt);
+  const trashedAlerts = () => (DB.alerts || []).filter((a) => a.trashedAt);
+
+  /** ለጊዜው፦ የተነበቡትን ወደ ቆሻሻ ማጠራቀሚያ ያንቀሳቅሳል (60 ቀን ይቆያሉ፣ መመለስ ይቻላል) */
+  function trashReadAlerts() {
+    if (!SBM.utils.requireAdmin()) return;
+    const list = liveAlerts().filter((a) => a.read);
+    if (list.length === 0) return showToast("የተነበበ ማሳወቂያ የለም");
+    if (!confirm(list.length + " የተነበቡ ማሳወቂያዎች ወደ ቆሻሻ ማጠራቀሚያ ይወሰዱ? (ለ" + TRASH_DAYS + " ቀን ይቆያሉ፣ መመለስ ይችላሉ)")) return;
+    const now = Date.now();
+    list.forEach((a) => { a.trashedAt = now; });
+    SBM.database.save("alerts");
+    showToast("ወደ ቆሻሻ ማጠራቀሚያ ተወስዷል 🗑️");
+    SBM.app.openPage("alerts");
+  }
+  /** ለዘላለም፦ የተነበቡትን ወዲያውኑ እና ሙሉ በሙሉ ይሰርዛል (መመለስ አይቻልም) */
+  function deleteReadAlertsForever() {
+    if (!SBM.utils.requireAdmin()) return;
+    const list = liveAlerts().filter((a) => a.read);
+    if (list.length === 0) return showToast("የተነበበ ማሳወቂያ የለም");
+    if (!confirm("⚠️ " + list.length + " የተነበቡ ማሳወቂያዎች ለዘላለም ይጥፉ? መመለስ አይቻልም!")) return;
+    DB.alerts = (DB.alerts || []).filter((a) => !(!a.trashedAt && a.read));
+    SBM.database.save("alerts");
+    showToast("ለዘላለም ተሰርዟል ❌");
+    SBM.app.openPage("alerts");
+  }
+  function renderAlertsTrashUI() {
+    if (!SBM.utils.requireAdmin()) return "";
+    const list = trashedAlerts().slice().sort((a, b) => b.trashedAt - a.trashedAt);
+    const left = (a) => Math.max(0, Math.ceil((a.trashedAt + TRASH_DAYS * 86400000 - Date.now()) / 86400000));
+    const rows = list.length === 0 ? '<tr><td colspan="2" style="text-align:center;">ቆሻሻ ማጠራቀሚያው ባዶ ነው</td></tr>'
+      : list.map((a) => `<tr><td><small>${escapeHTML(a.date)}</small><br><small>👤 ${escapeHTML(a.by || "")}</small><br><small>⏳ ${left(a)} ቀን ይቀራል</small></td>
+        <td>${escapeHTML(a.text || "")}${a.amount ? "<br><b>" + Number(a.amount).toFixed(2) + " ETB</b>" : ""}
+        <div style="display:flex;gap:6px;margin-top:6px;"><button class="btn-success" style="padding:4px 8px;font-size:12px;" onclick="SBM.report.restoreAlert(${Number(a.id)})">↩️ መልስ</button>
+        <button class="btn-danger" style="padding:4px 8px;font-size:12px;" onclick="SBM.report.deleteAlertForever(${Number(a.id)})">❌ ለዘላለም</button></div></td></tr>`).join("");
+    return `<div class="summary-box"><b>${list.length} በቆሻሻ ማጠራቀሚያ ውስጥ</b><br><small>ከ${TRASH_DAYS} ቀን በኋላ በራሱ ለዘላለም ይጠፋሉ።</small></div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button class="btn-success" style="flex:1;padding:8px;" onclick="SBM.report.restoreAllAlerts()">↩️ ሁሉንም መልስ</button>
+        <button class="btn-danger" style="flex:1;padding:8px;" onclick="SBM.report.emptyAlertsTrash()">❌ ባዶ አድርግ</button>
+      </div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('alerts')">⬅ ወደ ማሳወቂያዎች</button>
+      <div style="max-height:340px;overflow-y:auto;"><table><tbody>${rows}</tbody></table></div>`;
+  }
+  function restoreAlert(id) {
+    if (!SBM.utils.requireAdmin()) return;
+    const a = (DB.alerts || []).find((x) => Number(x.id) === Number(id));
+    if (!a) return;
+    delete a.trashedAt;
+    SBM.database.save("alerts");
+    SBM.app.openPage("alertsTrash");
+  }
+  function restoreAllAlerts() {
+    if (!SBM.utils.requireAdmin()) return;
+    trashedAlerts().forEach((a) => { delete a.trashedAt; });
+    SBM.database.save("alerts");
+    showToast("ተመልሷል ✅");
+    SBM.app.openPage("alertsTrash");
+  }
+  function deleteAlertForever(id) {
+    if (!SBM.utils.requireAdmin()) return;
+    if (!confirm("ይህ ማሳወቂያ ለዘላለም ይጥፋ? መመለስ አይቻልም!")) return;
+    DB.alerts = (DB.alerts || []).filter((x) => Number(x.id) !== Number(id));
+    SBM.database.save("alerts");
+    SBM.app.openPage("alertsTrash");
+  }
+  function emptyAlertsTrash() {
+    if (!SBM.utils.requireAdmin()) return;
+    const n = trashedAlerts().length;
+    if (n === 0) return showToast("ቆሻሻ ማጠራቀሚያው ባዶ ነው");
+    if (!confirm("⚠️ " + n + " ማሳወቂያዎች ለዘላለም ይጥፉ? መመለስ አይቻልም!")) return;
+    DB.alerts = liveAlerts();
+    SBM.database.save("alerts");
+    showToast("ባዶ ተደርጓል ❌");
+    SBM.app.openPage("alertsTrash");
+  }
+  /** በቆሻሻ ማጠራቀሚያ ውስጥ ከ60 ቀን በላይ የቆዩትን ብቻ በጸጥታ ለዘላለም ያጠፋል (አድሚን ሲገባ) */
+  function pruneAlertTrash() {
+    const limit = Date.now() - TRASH_DAYS * 86400000;
+    const before = (DB.alerts || []).length;
+    DB.alerts = (DB.alerts || []).filter((a) => !(a.trashedAt && Number(a.trashedAt) < limit));
+    if (DB.alerts.length !== before) SBM.database.save("alerts");
   }
   function markAllAlertsRead() {
     if (!SBM.utils.requireAdmin()) return;
-    (DB.alerts || []).forEach((a) => { a.read = true; });
+    (DB.alerts || []).filter((a) => !a.trashedAt).forEach((a) => { a.read = true; });
     SBM.database.save("alerts");
     SBM.app.renderDashboardMenu();
     SBM.app.openPage("alerts");
@@ -3362,16 +3460,100 @@ th{background:rgba(0,0,0,.03);font-weight:600}
     const t = Number(s.id);
     return t > 0 ? (Date.now() - t) / 86400000 : 0;
   }
+  // ---------- የተመላሽ መዝገብ እና የእቃ ጥያቄዎች፦ ለአድሚን ብቻ የሚሆን ማጥፋት (ለጊዜው → ቆሻሻ ማጠራቀሚያ 60 ቀን፣ ወይም ለዘላለም) ----------
+  const TRASHABLE = {
+    returns: { keep: true, page: "returnsLog", trashPage: "returnsTrash", title: "የተመላሽ መዝገብ", forever: "ይህ የተመላሽ መዝገብ የኦዲት ማስረጃ ነው። ለዘላለም ከጠፋ መመለስ አይቻልም።" },
+    stockRequests: { keep: true, page: "stockRequests", trashPage: "requestsTrash", title: "የእቃ ጥያቄዎች", forever: "ይህ ጥያቄ ለዘላለም ከጠፋ መመለስ አይቻልም።" },
+  };
+  const itemsOf = (coll) => (DB[coll] || []);
+  const findItem = (coll, id) => itemsOf(coll).find((x) => Number(x.id) === Number(id));
+
+  /** ለጊዜው አጥፋ → ወደ ቆሻሻ ማጠራቀሚያ (60 ቀን ይቆያል፣ ይመለሳል) */
+  function trashItem(coll, id) {
+    if (!SBM.utils.requireAdmin() || !TRASHABLE[coll]) return;
+    const it = findItem(coll, id);
+    if (!it) return;
+    if (coll === "stockRequests" && it.status === "pending") return alert("ገና ውሳኔ ያልተሰጠው ጥያቄ አይጠፋም፤ መጀመሪያ ይፍቀዱ ወይም ይከልክሉ።");
+    if (!confirm("ከዝርዝሩ ይደበቅ? (ዱካው ለዘላለም ይቀመጣል፤ በኋላ መመለስ ይችላሉ)")) return;
+    it.trashedAt = Date.now();
+    SBM.database.save(coll);
+    showToast("ተደብቋል 🙈 (ዱካው ተቀምጧል)");
+    if (coll === "stockRequests") SBM.app.renderDashboardMenu();
+    SBM.app.openPage(TRASHABLE[coll].page);
+  }
+  /** ለዘላለም አጥፋ (መመለስ አይቻልም) */
+  function deleteItemForever(coll, id, fromTrash) {
+    if (!SBM.utils.requireAdmin() || !TRASHABLE[coll]) return;
+    if (TRASHABLE[coll].keep) return showToast("ይህ መዝገብ ለኦዲት ዱካ ለዘላለም አይጠፋም 🔒");
+    const it = findItem(coll, id);
+    if (!it) return;
+    if (coll === "stockRequests" && it.status === "pending") return alert("ገና ውሳኔ ያልተሰጠው ጥያቄ አይጠፋም፤ መጀመሪያ ይፍቀዱ ወይም ይከልክሉ።");
+    if (!confirm("⚠️ " + TRASHABLE[coll].forever + "\nቀጥሎ ለዘላለም ይጥፋ?")) return;
+    DB[coll] = itemsOf(coll).filter((x) => Number(x.id) !== Number(id));
+    SBM.database.save(coll);
+    showToast("ለዘላለም ተሰርዟል ❌");
+    SBM.app.openPage(fromTrash ? TRASHABLE[coll].trashPage : TRASHABLE[coll].page);
+  }
+  function restoreItem(coll, id) {
+    if (!SBM.utils.requireAdmin() || !TRASHABLE[coll]) return;
+    const it = findItem(coll, id);
+    if (!it) return;
+    delete it.trashedAt;
+    SBM.database.save(coll);
+    showToast("ተመልሷል ✅");
+    SBM.app.openPage(TRASHABLE[coll].trashPage);
+  }
+  function emptyItemTrash(coll) {
+    if (!SBM.utils.requireAdmin() || !TRASHABLE[coll]) return;
+    if (TRASHABLE[coll].keep) return showToast("ይህ መዝገብ ለኦዲት ዱካ ለዘላለም አይጠፋም 🔒");
+    const n = itemsOf(coll).filter((x) => x.trashedAt).length;
+    if (n === 0) return showToast("ቆሻሻ ማጠራቀሚያው ባዶ ነው");
+    if (!confirm("⚠️ " + n + " መዝገቦች ለዘላለም ይጥፉ? መመለስ አይቻልም!")) return;
+    DB[coll] = itemsOf(coll).filter((x) => !x.trashedAt);
+    SBM.database.save(coll);
+    showToast("ባዶ ተደርጓል ❌");
+    SBM.app.openPage(TRASHABLE[coll].trashPage);
+  }
+  function renderItemTrashUI(coll) {
+    if (!SBM.utils.requireAdmin() || !TRASHABLE[coll]) return "";
+    const T = TRASHABLE[coll];
+    const list = itemsOf(coll).filter((x) => x.trashedAt).sort((a, b) => b.trashedAt - a.trashedAt);
+    const left = (x) => Math.max(0, Math.ceil((x.trashedAt + TRASH_DAYS * 86400000 - Date.now()) / 86400000));
+    const body = (x) => coll === "returns"
+      ? escapeHTML(x.items || "") + " — " + escapeHTML(x.customer || "") + "<br><b>" + Number(x.amount || 0).toFixed(2) + " ETB</b>"
+      : escapeHTML(x.desc || "") + "<br><small>" + (x.status === "approved" ? "✅ ተፈቅዷል" : x.status === "rejected" ? "❌ ተከልክሏል" : "") + "</small>";
+    const rows = list.length === 0 ? '<tr><td colspan="2" style="text-align:center;">ቆሻሻ ማጠራቀሚያው ባዶ ነው</td></tr>'
+      : list.map((x) => `<tr><td><small>${escapeHTML(x.date)}</small><br><small>👤 ${escapeHTML(x.by || "")}</small><br></td>
+        <td>${body(x)}<div style="display:flex;gap:6px;margin-top:6px;">
+          <button class="btn-success" style="padding:4px 8px;font-size:12px;" onclick="SBM.report.restoreItem('${coll}', ${Number(x.id)})">↩️ መልስ</button></div></td></tr>`).join("");
+    return `<div class="summary-box"><b>${list.length} የተደበቁ (${escapeHTML(T.title)})</b><br><small>🔒 ለኦዲት ዱካ ለዘላለም አይጠፉም፤ በፈለጉ ጊዜ መመለስ ይችላሉ።</small></div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('${T.page}')">⬅ ተመለስ</button>
+      <div style="max-height:340px;overflow-y:auto;"><table><tbody>${rows}</tbody></table></div>`;
+  }
+  /** በቆሻሻ ማጠራቀሚያ ውስጥ ከ60 ቀን በላይ የቆዩትን በጸጥታ ለዘላለም ያጠፋል */
+  function pruneItemTrash() {
+    const limit = Date.now() - TRASH_DAYS * 86400000;
+    Object.keys(TRASHABLE).forEach((coll) => {
+      if (TRASHABLE[coll].keep) return; // ዱካ ያላቸው መዝገቦች በራስ-ሰር አይጠፉም
+      const before = itemsOf(coll).length;
+      DB[coll] = itemsOf(coll).filter((x) => !(x.trashedAt && Number(x.trashedAt) < limit));
+      if (DB[coll].length !== before) SBM.database.save(coll);
+    });
+  }
+
   function renderReturnsLogUI() {
-    const list = (DB.returns || []).slice().reverse();
+    const list = (DB.returns || []).filter((x) => !x.trashedAt).slice().reverse();
+    const trashCount = (DB.returns || []).filter((x) => x.trashedAt).length;
     const total = list.reduce((a, r) => a + Number(r.amount || 0), 0);
     const rows = list.length === 0
       ? '<tr><td colspan="4" style="text-align:center;">ምንም የተመላሽ መዝገብ የለም</td></tr>'
       : list.map((r) => `<tr><td><small>${escapeHTML(r.date)}</small><br><small>👤 ${escapeHTML(r.by || "")}${r.role === "admin" ? " (አድሚን)" : ""}</small></td>
         <td><b>${escapeHTML(r.customer || "")}</b><br><small>የሽያጭ ቀን፡ ${escapeHTML(r.saleDate || "")}</small></td>
         <td><small>${escapeHTML(r.items || "")}</small>${r.creditReduced > 0 ? "<br><small>💳 ዕዳ ቀንሷል " + Number(r.creditReduced).toFixed(2) + "</small>" : ""}</td>
-        <td><b>${Number(r.amount || 0).toFixed(2)}</b><br><small>${r.full ? "ሙሉ" : "ከፊል"}</small></td></tr>`).join("");
-    return `<div class="summary-box"><b>ጠቅላላ የተመለሰ፦ ${total.toFixed(2)} ETB</b> (${list.length} መዝገብ)</div>
+        <td><b>${Number(r.amount || 0).toFixed(2)}</b><br><small>${r.full ? "ሙሉ" : "ከፊል"}</small>
+          <div style="display:flex;gap:4px;margin-top:4px;"><button class="btn-secondary" style="padding:3px 6px;font-size:11px;" onclick="SBM.report.trashItem('returns', ${Number(r.id)})">🙈 ደብቅ</button></div></td></tr>`).join("");
+    return `<div class="summary-box"><b>ጠቅላላ የተመለሰ፦ ${total.toFixed(2)} ETB</b> (${list.length} መዝገብ)<br><small>🔒 መዝገቡ ለኦዲት ለዘላለም ይቀመጣል — የተሳሳተ ምዝገባን መደበቅ ብቻ ይቻላል (ለአድሚን)</small></div>
+      <button class="btn-secondary" style="width:100%;padding:8px;margin-bottom:10px;" onclick="SBM.app.openPage('returnsTrash')">🙈 የተደበቁ (${trashCount})</button>
       <div style="max-height:380px;overflow-y:auto;"><table><thead><tr><th>መቼ/ማን</th><th>ደንበኛ</th><th>የተመለሰ እቃ</th><th>ብር</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -3609,7 +3791,7 @@ th{background:rgba(0,0,0,.03);font-weight:600}
   global.SBM = global.SBM || {};
   global.SBM.report = {
     renderExpenseUI, addExpense, deleteExpense,
-    renderDailyReportUI, renderSalesHistoryUI, filterSalesHistory, returnSale, renderReturnsLogUI, renderAlertsUI, markAllAlertsRead,
+    renderDailyReportUI, renderSalesHistoryUI, filterSalesHistory, returnSale, renderReturnsLogUI, renderAlertsUI, markAllAlertsRead, trashItem, deleteItemForever, restoreItem, emptyItemTrash, renderItemTrashUI, pruneItemTrash, trashReadAlerts, deleteReadAlertsForever, renderAlertsTrashUI, restoreAlert, restoreAllAlerts, deleteAlertForever, emptyAlertsTrash, pruneAlertTrash,
     renderMonthlyReportUI, updateMonthlyReport, showMonth, closeFinishedMonths, isMonthEndToday, getMonthSummary,
     renderVatReportUI, updateVatReport, saveVatInput,
     renderReportsUI, saleParts,
